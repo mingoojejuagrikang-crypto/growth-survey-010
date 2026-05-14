@@ -130,11 +130,11 @@ function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => 
 
         <div
           style={{
-            fontSize: 11,
+            fontSize: 14,
             color: T.textMute,
             textAlign: 'center',
             lineHeight: 1.5,
-            maxWidth: 280,
+            maxWidth: 300,
           }}
         >
           시작 후 휴대전화를 보거나 만지지 마세요.

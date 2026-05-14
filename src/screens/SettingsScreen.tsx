@@ -23,7 +23,7 @@ import { computeTotalRows } from '../lib/autoValue';
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float'];
 
 function ToggleSwitch({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
-  const W = 32, H = 18, D = H - 4;
+  const W = 44, H = 26, D = H - 4;
   return (
     <button
       onClick={() => onChange(!on)}
@@ -59,10 +59,10 @@ function MiniInput({
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       style={{
-        width: wide ? 80 : 36, height: 22, borderRadius: 6,
+        width: wide ? 100 : 52, height: 32, borderRadius: 8,
         background: T.inputBg, border: `1px solid ${T.line}`,
-        color: T.text, fontSize: 11, fontWeight: 600,
-        textAlign: 'center', outline: 'none', padding: '0 4px',
+        color: T.text, fontSize: 15, fontWeight: 600,
+        textAlign: 'center', outline: 'none', padding: '0 6px',
         fontFamily: 'JetBrains Mono, ui-monospace, monospace',
       }}
     />
@@ -78,8 +78,8 @@ function ThreeWay({ value, onChange }: { value: InputMode; onChange: (v: InputMo
   return (
     <div
       style={{
-        display: 'inline-flex', background: T.inputBg, borderRadius: 7,
-        padding: 2, border: `1px solid ${T.line}`, height: 24,
+        display: 'inline-flex', background: T.inputBg, borderRadius: 10,
+        padding: 3, border: `1px solid ${T.line}`, height: 36,
       }}
     >
       {opts.map((o) => {
@@ -91,8 +91,8 @@ function ThreeWay({ value, onChange }: { value: InputMode; onChange: (v: InputMo
             style={{
               border: 'none', background: active ? T.blue : 'transparent',
               color: active ? '#fff' : T.textDim,
-              fontSize: 10.5, fontWeight: active ? 700 : 600,
-              padding: '0 8px', borderRadius: 6, cursor: 'pointer',
+              fontSize: 14, fontWeight: active ? 700 : 600,
+              padding: '0 12px', borderRadius: 8, cursor: 'pointer',
               letterSpacing: -0.1, height: '100%', whiteSpace: 'nowrap',
             }}
           >
@@ -108,15 +108,15 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
   const isInt = col.type === 'int';
   if (isInt && col.auto.kind === 'seq') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
-        <span style={{ fontSize: 10, color: T.textMute, letterSpacing: -0.1 }}>순차</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, color: T.textMute, letterSpacing: -0.1 }}>순차</span>
         <MiniInput
           value={col.auto.from}
           onChange={(v) =>
             onChange({ ...col, auto: { kind: 'seq', from: +v || 0, to: col.auto.kind === 'seq' ? col.auto.to : 0 } })
           }
         />
-        <span style={{ color: T.textMute, fontSize: 11 }}>~</span>
+        <span style={{ color: T.textMute, fontSize: 14 }}>~</span>
         <MiniInput
           value={col.auto.to}
           onChange={(v) =>
@@ -126,7 +126,7 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
         <button
           onClick={() => onChange({ ...col, auto: { kind: 'fixed', value: '' } })}
           style={{
-            border: 'none', background: 'transparent', color: T.textMute, fontSize: 10,
+            border: 'none', background: 'transparent', color: T.textMute, fontSize: 13,
             cursor: 'pointer', textDecoration: 'underline',
           }}
         >
@@ -136,8 +136,8 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
     );
   }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
-      <span style={{ fontSize: 10, color: T.textMute, letterSpacing: -0.1 }}>고정값</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 13, color: T.textMute, letterSpacing: -0.1 }}>고정값</span>
       <MiniInput
         value={col.auto.kind === 'fixed' ? col.auto.value : ''}
         placeholder={col.type === 'date' ? '오늘' : col.type === 'int' ? '0' : '값'}
@@ -148,8 +148,8 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
         <button
           onClick={() => onChange({ ...col, auto: { kind: 'seq', from: 1, to: 50 } })}
           style={{
-            border: 'none', background: 'transparent', color: T.blue, fontSize: 10,
-            cursor: 'pointer', fontWeight: 600,
+            border: 'none', background: 'transparent', color: T.blue, fontSize: 13,
+            cursor: 'pointer', fontWeight: 700,
           }}
         >
           순차
@@ -164,47 +164,47 @@ function ColumnCard({ col, onChange }: { col: Column; onChange: (c: Column) => v
   return (
     <div
       style={{
-        background: T.card, borderRadius: 12,
+        background: T.card, borderRadius: 14,
         border: `1px solid ${T.line}`,
-        padding: '5px 8px 5px 2px',
-        display: 'flex', flexDirection: 'column', gap: 3,
+        padding: '10px 12px 10px 4px',
+        display: 'flex', flexDirection: 'column', gap: 8,
         flexShrink: 0,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <div
           style={{
-            width: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: T.textMute, cursor: 'grab',
           }}
         >
-          {I.grip(14)}
+          {I.grip(18)}
         </div>
         <input
           value={col.name}
           onChange={(e) => onChange({ ...col, name: e.target.value })}
           style={{
             flex: 1, background: 'transparent', border: 'none',
-            color: T.text, fontSize: 14, fontWeight: 600, outline: 'none',
+            color: T.text, fontSize: 18, fontWeight: 700, outline: 'none',
             letterSpacing: -0.2, padding: '2px 2px', minWidth: 0,
           }}
         />
         <button
           style={{
-            height: 22, borderRadius: 999, padding: '0 8px',
+            height: 32, borderRadius: 999, padding: '0 12px',
             border: 'none', background: typ.bg, color: typ.fg,
-            fontSize: 10.5, fontWeight: 700, letterSpacing: 0.1,
-            display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer',
+            fontSize: 14, fontWeight: 700, letterSpacing: 0.1,
+            display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
           }}
           onClick={() => {
             const next = TYPE_ORDER[(TYPE_ORDER.indexOf(col.type) + 1) % TYPE_ORDER.length];
             onChange({ ...col, type: next });
           }}
         >
-          {TYPE_LABELS[col.type]} {I.chevDown(10, typ.fg)}
+          {TYPE_LABELS[col.type]} {I.chevDown(12, typ.fg)}
         </button>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 26, minHeight: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 32, minHeight: 36, flexWrap: 'wrap' }}>
         <ThreeWay value={col.mode} onChange={(v) => onChange({ ...col, mode: v })} />
         {col.mode !== 'voice' && <AutoDetail col={col} onChange={onChange} />}
       </div>
@@ -214,10 +214,8 @@ function ColumnCard({ col, onChange }: { col: Column; onChange: (c: Column) => v
 
 export function SettingsScreen() {
   const s = useSettingsStore();
-  const [showAllCols, setShowAllCols] = useState(false);
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const visibleCols = showAllCols ? s.columns : s.columns.slice(0, 4);
   const googleConfigured = isGoogleConfigured();
 
   // restore session from stored token
@@ -307,29 +305,41 @@ export function SettingsScreen() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <ScreenHeader title="설정" sub="오늘의 측정 항목과 시트 연결" />
 
+      {/* Scrollable content area */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          WebkitOverflowScrolling: 'touch',
+          paddingBottom: 12,
+        }}
+      >
+
       {/* Section 1 - Google + Sheet URL */}
       <div style={{ padding: '0 16px', flexShrink: 0 }}>
         <div
           style={{
-            background: T.card, borderRadius: 14, padding: 10,
+            background: T.card, borderRadius: 16, padding: 14,
             border: `1px solid ${T.line}`,
-            display: 'flex', flexDirection: 'column', gap: 8,
+            display: 'flex', flexDirection: 'column', gap: 10,
           }}
         >
           <button
             onClick={onGoogleClick}
             disabled={loading !== null}
             style={{
-              height: 48, borderRadius: 12,
+              height: 56, borderRadius: 14,
               border: `1px solid ${s.googleConnected ? 'rgba(0,200,83,0.35)' : T.lineStrong}`,
               background: s.googleConnected ? 'rgba(0,200,83,0.10)' : '#2A2D32',
-              color: T.text, fontSize: 14, fontWeight: 600,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+              color: T.text, fontSize: 17, fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
               cursor: loading ? 'wait' : 'pointer', letterSpacing: -0.2,
               opacity: loading ? 0.7 : 1,
             }}
           >
-            <AuthMark s={18} />
+            <AuthMark s={22} />
             {s.googleConnected ? (
               <>
                 연결됨 · <span style={{ color: T.textDim, fontWeight: 500 }}>{s.userEmail}</span>
@@ -337,24 +347,24 @@ export function SettingsScreen() {
             ) : (
               <>Google 로그인</>
             )}
-            {s.googleConnected && I.check(16, T.green)}
+            {s.googleConnected && I.check(20, T.green)}
           </button>
 
           <div
             style={{
-              height: 44, borderRadius: 10,
+              height: 52, borderRadius: 12,
               background: T.inputBg, border: `1px solid ${T.line}`,
-              display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px',
+              display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px',
             }}
           >
-            <div style={{ color: T.textMute }}>{I.link(14)}</div>
+            <div style={{ color: T.textMute }}>{I.link(18)}</div>
             <input
               value={s.sheetUrl}
               onChange={(e) => onUrlChange(e.target.value)}
               placeholder="스프레드시트 URL 붙여넣기"
               style={{
                 flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                fontSize: 12, color: T.text, minWidth: 0,
+                fontSize: 15, color: T.text, minWidth: 0,
               }}
             />
             {s.sheetUrl && (
@@ -369,10 +379,10 @@ export function SettingsScreen() {
               value={s.sheetTab}
               onChange={(e) => onSheetTabChange(e.target.value)}
               style={{
-                height: 40, borderRadius: 10, background: T.inputBg,
+                height: 48, borderRadius: 12, background: T.inputBg,
                 border: `1px solid ${T.line}`,
-                padding: '0 10px',
-                fontSize: 13, color: T.text, fontWeight: 500,
+                padding: '0 12px',
+                fontSize: 16, color: T.text, fontWeight: 600,
                 appearance: 'none',
                 outline: 'none',
               }}
@@ -388,9 +398,10 @@ export function SettingsScreen() {
           {(loading || error) && (
             <div
               style={{
-                fontSize: 11,
+                fontSize: 14,
                 color: error ? T.red : T.textDim,
-                padding: '2px 4px',
+                padding: '4px 6px',
+                lineHeight: 1.4,
               }}
             >
               {error || loading}
@@ -400,10 +411,10 @@ export function SettingsScreen() {
           <div
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              paddingTop: 2,
+              paddingTop: 4,
             }}
           >
-            <span style={{ fontSize: 12, color: T.textDim, letterSpacing: -0.1 }}>
+            <span style={{ fontSize: 15, color: T.textDim, letterSpacing: -0.1 }}>
               링크 없이 직접 설정
             </span>
             <ToggleSwitch on={s.manualMode} onChange={(v) => s.set({ manualMode: v })} />
@@ -414,9 +425,8 @@ export function SettingsScreen() {
       {/* Section 2 - Column list */}
       <div
         style={{
-          marginTop: 10, paddingLeft: 16, paddingRight: 16,
-          display: 'flex', flexDirection: 'column', gap: 4,
-          flex: 1, minHeight: 0,
+          marginTop: 14, paddingLeft: 16, paddingRight: 16,
+          display: 'flex', flexDirection: 'column', gap: 8,
         }}
       >
         <div
@@ -425,72 +435,68 @@ export function SettingsScreen() {
             padding: '0 4px',
           }}
         >
-          <span style={{ fontSize: 10.5, fontWeight: 700, color: T.textDim, letterSpacing: 0.6 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: T.textDim, letterSpacing: 0.6 }}>
             컬럼 · {s.columns.length}개
           </span>
-          <button
-            onClick={() => setShowAllCols(!showAllCols)}
-            style={{
-              background: 'transparent', border: 'none', cursor: 'pointer',
-              fontSize: 9.5, color: T.textMute, letterSpacing: -0.1, whiteSpace: 'nowrap',
-            }}
-          >
-            {showAllCols ? '접기' : s.columns.length > 4 ? '전체 보기' : '손잡이로 순서 변경'}
-          </button>
+          <span style={{ fontSize: 12, color: T.textMute, letterSpacing: -0.1, whiteSpace: 'nowrap' }}>
+            손잡이로 순서 변경
+          </span>
         </div>
 
         <div
           style={{
-            display: 'flex', flexDirection: 'column', gap: 4,
-            flex: 1, minHeight: 0, overflow: showAllCols ? 'auto' : 'hidden',
+            display: 'flex', flexDirection: 'column', gap: 8,
           }}
         >
-          {visibleCols.map((c) => (
+          {s.columns.map((c) => (
             <ColumnCard key={c.id} col={c} onChange={(n) => s.updateColumn(c.id, n)} />
           ))}
 
           <button
             onClick={s.addColumn}
             style={{
-              height: 32, borderRadius: 10,
+              height: 44, borderRadius: 12,
               background: 'transparent', border: `1px dashed ${T.lineStrong}`,
-              color: T.textDim, fontSize: 11.5, fontWeight: 600,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              color: T.textDim, fontSize: 15, fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
               cursor: 'pointer', flexShrink: 0,
             }}
           >
-            {I.plus(13, T.textDim)} 항목 추가
+            {I.plus(16, T.textDim)} 항목 추가
           </button>
         </div>
       </div>
 
+      </div>
+      {/* End scrollable area */}
+
       {/* Section 3 - Action bar */}
       <div
         style={{
-          padding: '8px 16px 10px', borderTop: `1px solid ${T.line}`,
-          background: 'rgba(255,255,255,0.015)',
-          display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexShrink: 0,
+          padding: '12px 16px 12px', borderTop: `1px solid ${T.line}`,
+          background: 'rgba(255,255,255,0.02)',
+          display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
         }}
       >
         {s.tableGenerated ? (
           <>
             <div
               style={{
-                flex: 1, height: 48, borderRadius: 24,
+                flex: 1, height: 56, borderRadius: 28,
                 background: 'rgba(0,200,83,0.12)',
                 border: '1px solid rgba(0,200,83,0.35)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                fontSize: 13, fontWeight: 700, color: T.green,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                fontSize: 16, fontWeight: 700, color: T.green,
               }}
             >
-              {I.check(16, T.green)} 총 {s.totalRows}행 생성됨
+              {I.check(20, T.green)} 총 {s.totalRows}행 생성됨
             </div>
             <button
               onClick={onGenerate}
               style={{
-                height: 48, padding: '0 14px', borderRadius: 24,
+                height: 56, padding: '0 18px', borderRadius: 28,
                 border: `1px solid ${T.lineStrong}`, background: 'transparent',
-                color: T.textDim, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
               }}
             >
               재생성
@@ -500,15 +506,15 @@ export function SettingsScreen() {
           <button
             onClick={onGenerate}
             style={{
-              flex: 1, height: 48, borderRadius: 24, border: 'none',
+              flex: 1, height: 56, borderRadius: 28, border: 'none',
               background: T.blue, color: '#fff',
-              fontSize: 15, fontWeight: 700, letterSpacing: -0.2,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              fontSize: 18, fontWeight: 800, letterSpacing: -0.2,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
               cursor: 'pointer',
               boxShadow: `0 6px 18px ${T.blueGlow}`,
             }}
           >
-            {I.table(16, '#fff')} 오늘 테이블 생성
+            {I.table(20, '#fff')} 오늘 테이블 생성
           </button>
         )}
       </div>

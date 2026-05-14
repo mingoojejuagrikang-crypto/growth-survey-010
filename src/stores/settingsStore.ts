@@ -23,11 +23,15 @@ interface SettingsState {
 
 const MOCK_COLUMNS: Column[] = [
   { id: 'c1', name: '조사일자', type: 'date', mode: 'silent', auto: { kind: 'fixed', value: '오늘' } },
-  { id: 'c2', name: '농가명', type: 'text', mode: 'silent', auto: { kind: 'fixed', value: '강남호' } },
-  { id: 'c3', name: '나무번호', type: 'int', mode: 'auto', auto: { kind: 'seq', from: 1, to: 10 } },
-  { id: 'c4', name: '과실번호', type: 'int', mode: 'auto', auto: { kind: 'seq', from: 1, to: 5 } },
-  { id: 'c5', name: '횡경', type: 'float', mode: 'voice', auto: { kind: 'fixed', value: '' }, decimals: 1 },
-  { id: 'c6', name: '종경', type: 'float', mode: 'voice', auto: { kind: 'fixed', value: '' }, decimals: 1 },
+  { id: 'c2', name: '기준일자', type: 'date', mode: 'silent', auto: { kind: 'fixed', value: '2026-05-13' } },
+  { id: 'c3', name: '농가명', type: 'text', mode: 'silent', auto: { kind: 'fixed', value: '이원창' } },
+  { id: 'c4', name: '라벨', type: 'text', mode: 'silent', auto: { kind: 'fixed', value: 'A' } },
+  { id: 'c5', name: '처리', type: 'text', mode: 'silent', auto: { kind: 'fixed', value: '시험' } },
+  { id: 'c6', name: '조사나무', type: 'int', mode: 'auto', auto: { kind: 'seq', from: 1, to: 10 } },
+  { id: 'c7', name: '조사과실', type: 'int', mode: 'auto', auto: { kind: 'seq', from: 1, to: 5 } },
+  { id: 'c8', name: '횡경', type: 'float', mode: 'voice', auto: { kind: 'fixed', value: '' }, decimals: 1 },
+  { id: 'c9', name: '종경', type: 'float', mode: 'voice', auto: { kind: 'fixed', value: '' }, decimals: 1 },
+  { id: 'c10', name: '비고', type: 'text', mode: 'silent', auto: { kind: 'fixed', value: '' } },
 ];
 
 export const useSettingsStore = create<SettingsState>()(
@@ -72,6 +76,6 @@ export const useSettingsStore = create<SettingsState>()(
           return { columns: copy };
         }),
     }),
-    { name: 'growth-survey-010-settings' },
+    { name: 'growth-survey-010-settings-v2' },
   ),
 );

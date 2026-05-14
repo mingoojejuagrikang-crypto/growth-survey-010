@@ -49,43 +49,43 @@ export function DataScreen() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <ScreenHeader title="데이터" sub={`${sessions.length}개 세션`} />
 
-      <div style={{ padding: '0 16px 10px', display: 'flex', gap: 8, flexShrink: 0 }}>
+      <div style={{ padding: '0 16px 12px', display: 'flex', gap: 10, flexShrink: 0 }}>
         <button
           onClick={doSync}
           disabled={busy !== null}
           style={{
             flex: 1,
-            height: 44,
-            borderRadius: 12,
+            height: 56,
+            borderRadius: 14,
             border: 'none',
             background: T.blue,
             color: '#fff',
-            fontSize: 13,
-            fontWeight: 700,
+            fontSize: 16,
+            fontWeight: 800,
             letterSpacing: -0.2,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: 8,
+            gap: 10,
             cursor: 'pointer',
             position: 'relative',
             boxShadow: `0 4px 14px ${T.blueGlow}`,
           }}
         >
-          {I.sync(15, '#fff')} Sheets 동기화
+          {I.sync(20, '#fff')} Sheets 동기화
           {unsynced > 0 && (
             <span
               style={{
                 position: 'absolute',
-                top: -4,
-                right: -4,
-                minWidth: 20,
-                height: 20,
-                padding: '0 6px',
+                top: -6,
+                right: -6,
+                minWidth: 26,
+                height: 26,
+                padding: '0 8px',
                 borderRadius: 999,
                 background: T.amber,
                 color: '#1a1300',
-                fontSize: 11,
+                fontSize: 14,
                 fontWeight: 800,
                 fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                 display: 'flex',
@@ -101,32 +101,32 @@ export function DataScreen() {
         <button
           onClick={doCsv}
           style={{
-            height: 44,
-            padding: '0 14px',
-            borderRadius: 12,
+            height: 56,
+            padding: '0 18px',
+            borderRadius: 14,
             border: `1px solid ${T.lineStrong}`,
             background: T.card,
             color: T.text,
-            fontSize: 13,
-            fontWeight: 600,
+            fontSize: 16,
+            fontWeight: 700,
             display: 'flex',
             alignItems: 'center',
-            gap: 6,
+            gap: 8,
             cursor: 'pointer',
           }}
         >
-          {I.download(15, T.text)} CSV
+          {I.download(20, T.text)} CSV
         </button>
       </div>
 
       {(busy || msg) && (
         <div
           style={{
-            margin: '0 16px 8px',
-            padding: '6px 10px',
-            borderRadius: 8,
+            margin: '0 16px 10px',
+            padding: '10px 14px',
+            borderRadius: 10,
             background: 'rgba(255,255,255,0.04)',
-            fontSize: 11,
+            fontSize: 14,
             color: msg?.startsWith('✓') ? T.green : T.textDim,
             flexShrink: 0,
           }}
@@ -139,11 +139,13 @@ export function DataScreen() {
         style={{
           flex: 1,
           minHeight: 0,
-          padding: '0 16px 12px',
+          padding: '0 16px 16px',
           display: 'flex',
           flexDirection: 'column',
-          gap: 8,
-          overflow: 'auto',
+          gap: 10,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          WebkitOverflowScrolling: 'touch',
         }}
       >
         {empty ? (
@@ -203,19 +205,20 @@ function SessionCard({
           width: '100%',
           border: 'none',
           background: 'transparent',
-          padding: '12px 14px',
+          padding: '16px 16px',
           display: 'flex',
           alignItems: 'center',
-          gap: 12,
+          gap: 14,
           cursor: 'pointer',
           textAlign: 'left',
           color: 'inherit',
+          minHeight: 60,
         }}
       >
         <div>
           <div
             style={{
-              fontSize: 13,
+              fontSize: 16,
               fontWeight: 700,
               color: T.text,
               letterSpacing: -0.2,
@@ -226,7 +229,7 @@ function SessionCard({
             {session.date}
           </div>
           {session.label && (
-            <div style={{ fontSize: 10, color: T.textMute, marginTop: 2 }}>{session.label}</div>
+            <div style={{ fontSize: 13, color: T.textMute, marginTop: 3 }}>{session.label}</div>
           )}
         </div>
         <div style={{ flex: 1 }} />
@@ -235,15 +238,15 @@ function SessionCard({
           style={{
             display: 'flex',
             alignItems: 'baseline',
-            gap: 3,
-            padding: '4px 10px',
-            borderRadius: 8,
+            gap: 4,
+            padding: '6px 12px',
+            borderRadius: 10,
             background: 'rgba(255,255,255,0.04)',
           }}
         >
           <span
             style={{
-              fontSize: 14,
+              fontSize: 18,
               fontWeight: 800,
               color: T.text,
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
@@ -251,16 +254,16 @@ function SessionCard({
           >
             {session.completedRows}
           </span>
-          <span style={{ fontSize: 10, color: T.textMute, fontWeight: 600 }}>행</span>
+          <span style={{ fontSize: 13, color: T.textMute, fontWeight: 600 }}>행</span>
         </div>
 
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 4,
+            gap: 6,
             color: syncColor,
-            fontSize: 11,
+            fontSize: 13,
             fontWeight: 700,
           }}
         >
@@ -277,7 +280,7 @@ function SessionCard({
             transition: 'transform 180ms',
           }}
         >
-          {I.chevron(14, T.textDim)}
+          {I.chevron(18, T.textDim)}
         </div>
       </button>
 
@@ -288,14 +291,14 @@ function SessionCard({
 
 function ExpandedRowTable({ session }: { session: Session }) {
   const showCols: Column[] = session.columns.slice(0, 4);
-  const rows = session.rows.slice(0, 4);
+  const rows = session.rows.slice(0, 6);
   const remaining = Math.max(0, session.completedRows - rows.length);
 
   return (
     <div
       style={{
         borderTop: `1px solid ${T.line}`,
-        padding: '8px 10px 10px',
+        padding: '12px 12px 12px',
         background: 'rgba(255,255,255,0.015)',
         animation: 'fade-up 200ms ease-out',
       }}
@@ -303,16 +306,16 @@ function ExpandedRowTable({ session }: { session: Session }) {
       <div
         style={{
           display: 'flex',
-          gap: 6,
-          padding: '4px 6px',
-          fontSize: 9,
+          gap: 8,
+          padding: '6px 8px',
+          fontSize: 12,
           fontWeight: 700,
           color: T.textMute,
           letterSpacing: 0.5,
           borderBottom: `1px solid ${T.line}`,
         }}
       >
-        <div style={{ width: 22, flexShrink: 0 }}>#</div>
+        <div style={{ width: 28, flexShrink: 0 }}>#</div>
         {showCols.map((c) => (
           <div
             key={c.id}
@@ -334,15 +337,15 @@ function ExpandedRowTable({ session }: { session: Session }) {
           key={r.index}
           style={{
             display: 'flex',
-            gap: 6,
-            padding: '5px 6px',
-            fontSize: 11,
+            gap: 8,
+            padding: '8px 8px',
+            fontSize: 14,
             color: T.text,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             borderBottom: i < rows.length - 1 ? `1px solid ${T.line}` : 'none',
           }}
         >
-          <div style={{ width: 22, flexShrink: 0, color: T.textMute }}>{r.index}</div>
+          <div style={{ width: 28, flexShrink: 0, color: T.textMute }}>{r.index}</div>
           {showCols.map((c) => (
             <div
               key={c.id}
@@ -365,10 +368,10 @@ function ExpandedRowTable({ session }: { session: Session }) {
         <div
           style={{
             textAlign: 'center',
-            padding: '6px 0 2px',
-            fontSize: 10,
+            padding: '10px 0 4px',
+            fontSize: 13,
             color: T.textMute,
-            fontWeight: 500,
+            fontWeight: 600,
           }}
         >
           … +{remaining}행
@@ -387,14 +390,14 @@ function EmptyState() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 14,
-        padding: '0 32px',
+        gap: 18,
+        padding: '40px 32px',
       }}
     >
       <div
         style={{
-          width: 88,
-          height: 88,
+          width: 110,
+          height: 110,
           borderRadius: '50%',
           background: 'rgba(255,255,255,0.03)',
           border: `1px dashed ${T.lineStrong}`,
@@ -404,12 +407,12 @@ function EmptyState() {
           color: T.textMute,
         }}
       >
-        {I.data(40, T.textMute)}
+        {I.data(50, T.textMute)}
       </div>
       <div
         style={{
-          fontSize: 14,
-          fontWeight: 600,
+          fontSize: 17,
+          fontWeight: 700,
           color: T.textDim,
           letterSpacing: -0.2,
           textAlign: 'center',
@@ -418,7 +421,7 @@ function EmptyState() {
         아직 기록된 데이터가 없습니다
       </div>
       <div
-        style={{ fontSize: 11, color: T.textMute, textAlign: 'center', lineHeight: 1.5 }}
+        style={{ fontSize: 14, color: T.textMute, textAlign: 'center', lineHeight: 1.5 }}
       >
         입력 탭에서 음성 세션을 시작하면<br />이곳에 표시됩니다
       </div>

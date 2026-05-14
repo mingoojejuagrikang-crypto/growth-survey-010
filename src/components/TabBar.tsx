@@ -51,9 +51,9 @@ export function TabBar({ tab, setTab }: Props) {
           >
             <div
               style={{
-                width: 38,
-                height: 26,
-                borderRadius: 13,
+                width: 44,
+                height: 30,
+                borderRadius: 15,
                 background: active ? T.blueGlow : 'transparent',
                 display: 'flex',
                 alignItems: 'center',
@@ -61,9 +61,9 @@ export function TabBar({ tab, setTab }: Props) {
                 transition: 'background 200ms',
               }}
             >
-              {t.icon(20)}
+              {t.icon(24)}
             </div>
-            <div style={{ fontSize: 11, fontWeight: active ? 700 : 500, letterSpacing: 0.1 }}>
+            <div style={{ fontSize: 13, fontWeight: active ? 700 : 500, letterSpacing: 0.1 }}>
               {t.label}
             </div>
           </button>

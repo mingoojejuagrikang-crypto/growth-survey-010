@@ -21,10 +21,10 @@ export function Chip({
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 4,
-        padding: '4px 9px',
+        gap: 5,
+        padding: '5px 11px',
         borderRadius: 999,
-        fontSize: 11,
+        fontSize: 13,
         fontWeight: strong ? 700 : 500,
         color,
         background: bg,
