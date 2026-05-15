@@ -1,16 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { T } from '../tokens';
 import { I } from '../components/icons';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useDataStore } from '../stores/dataStore';
 import { syncAll } from '../lib/sync';
 import { downloadCsv, sessionsToCsv } from '../lib/csv';
+import { saveSession } from '../lib/db';
 import type { Column, Session } from '../types';
 
 export function DataScreen() {
   const sessions = useDataStore((s) => s.sessions);
   const expandedSessionId = useDataStore((s) => s.expandedSessionId);
   const toggleExpand = useDataStore((s) => s.toggleExpand);
+  const updateRowValue = useDataStore((s) => s.updateRowValue);
   const unsynced = sessions.filter((s) => s.syncedRows < s.completedRows).length;
   const empty = sessions.length === 0;
   const [busy, setBusy] = useState<string | null>(null);
@@ -18,17 +20,17 @@ export function DataScreen() {
 
   const doSync = async () => {
     if (busy) return;
-    setBusy('동기화 중...');
+    setBusy('시트에 추가 중...');
     setMsg(null);
     try {
       const report = await syncAll();
       if (report.message) setMsg(report.message);
       else if (report.failed > 0)
-        setMsg(`${report.ok}개 성공, ${report.failed}개 실패 (${report.rows}행)`);
-      else if (report.ok > 0) setMsg(`✓ ${report.rows}행 동기화 완료`);
-      else setMsg('동기화할 데이터가 없습니다.');
+        setMsg(`${report.ok}개 세션 성공, ${report.failed}개 실패 (${report.rows}행 추가됨)`);
+      else if (report.ok > 0) setMsg(`✓ ${report.rows}행을 시트에 추가했습니다`);
+      else setMsg('추가할 새 데이터가 없습니다.');
     } catch (err) {
-      setMsg('동기화 실패: ' + (err as Error).message);
+      setMsg('실패: ' + (err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -43,6 +45,15 @@ export function DataScreen() {
     const filename = `survey_${new Date().toISOString().slice(0, 10)}.csv`;
     downloadCsv(filename, csv);
     setMsg(`✓ ${filename} 다운로드됨`);
+  };
+
+  const handleCellSave = async (sessionId: string, rowIndex: number, colId: string, value: string) => {
+    updateRowValue(sessionId, rowIndex, colId, value);
+    // Persist to IndexedDB
+    const updated = useDataStore.getState().sessions.find((x) => x.id === sessionId);
+    if (updated) {
+      try { await saveSession(updated); } catch { /* ignore */ }
+    }
   };
 
   return (
@@ -72,25 +83,16 @@ export function DataScreen() {
             boxShadow: `0 4px 14px ${T.blueGlow}`,
           }}
         >
-          {I.sync(20, '#fff')} Sheets 동기화
+          {I.sync(20, '#fff')} 시트에 데이터 추가
           {unsynced > 0 && (
             <span
               style={{
-                position: 'absolute',
-                top: -6,
-                right: -6,
-                minWidth: 26,
-                height: 26,
-                padding: '0 8px',
-                borderRadius: 999,
-                background: T.amber,
-                color: '#1a1300',
-                fontSize: 14,
-                fontWeight: 800,
+                position: 'absolute', top: -6, right: -6,
+                minWidth: 26, height: 26, padding: '0 8px',
+                borderRadius: 999, background: T.amber, color: '#1a1300',
+                fontSize: 14, fontWeight: 800,
                 fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
                 border: '2px solid #0E0F11',
               }}
             >
@@ -101,18 +103,10 @@ export function DataScreen() {
         <button
           onClick={doCsv}
           style={{
-            height: 56,
-            padding: '0 18px',
-            borderRadius: 14,
-            border: `1px solid ${T.lineStrong}`,
-            background: T.card,
-            color: T.text,
-            fontSize: 16,
-            fontWeight: 700,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            cursor: 'pointer',
+            height: 56, padding: '0 18px', borderRadius: 14,
+            border: `1px solid ${T.lineStrong}`, background: T.card,
+            color: T.text, fontSize: 16, fontWeight: 700,
+            display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
           }}
         >
           {I.download(20, T.text)} CSV
@@ -123,11 +117,9 @@ export function DataScreen() {
         <div
           style={{
             margin: '0 16px 10px',
-            padding: '10px 14px',
-            borderRadius: 10,
+            padding: '10px 14px', borderRadius: 10,
             background: 'rgba(255,255,255,0.04)',
-            fontSize: 14,
-            color: msg?.startsWith('✓') ? T.green : T.textDim,
+            fontSize: 14, color: msg?.startsWith('✓') ? T.green : T.textDim,
             flexShrink: 0,
           }}
         >
@@ -137,14 +129,10 @@ export function DataScreen() {
 
       <div
         style={{
-          flex: 1,
-          minHeight: 0,
+          flex: 1, minHeight: 0,
           padding: '0 16px 16px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 10,
-          overflowY: 'auto',
-          overflowX: 'hidden',
+          display: 'flex', flexDirection: 'column', gap: 10,
+          overflowY: 'auto', overflowX: 'hidden',
           WebkitOverflowScrolling: 'touch',
         }}
       >
@@ -157,6 +145,7 @@ export function DataScreen() {
               session={s}
               expanded={expandedSessionId === s.id}
               onToggle={() => toggleExpand(s.id)}
+              onCellSave={(rowIndex, colId, value) => handleCellSave(s.id, rowIndex, colId, value)}
             />
           ))
         )}
@@ -165,14 +154,14 @@ export function DataScreen() {
   );
 }
 
+// ─── session card ──────────────────────────────────────────────
 function SessionCard({
-  session,
-  expanded,
-  onToggle,
+  session, expanded, onToggle, onCellSave,
 }: {
   session: Session;
   expanded: boolean;
   onToggle: () => void;
+  onCellSave: (rowIndex: number, colId: string, value: string) => void;
 }) {
   const fullySynced = session.syncedRows >= session.completedRows && session.completedRows > 0;
   const partial = session.syncedRows > 0 && !fullySynced;
@@ -202,25 +191,16 @@ function SessionCard({
       <button
         onClick={onToggle}
         style={{
-          width: '100%',
-          border: 'none',
-          background: 'transparent',
+          width: '100%', border: 'none', background: 'transparent',
           padding: '16px 16px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 14,
-          cursor: 'pointer',
-          textAlign: 'left',
-          color: 'inherit',
-          minHeight: 60,
+          display: 'flex', alignItems: 'center', gap: 14,
+          cursor: 'pointer', textAlign: 'left', color: 'inherit', minHeight: 60,
         }}
       >
         <div>
           <div
             style={{
-              fontSize: 16,
-              fontWeight: 700,
-              color: T.text,
+              fontSize: 16, fontWeight: 700, color: T.text,
               letterSpacing: -0.2,
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
               whiteSpace: 'nowrap',
@@ -236,19 +216,14 @@ function SessionCard({
 
         <div
           style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            gap: 4,
-            padding: '6px 12px',
-            borderRadius: 10,
+            display: 'flex', alignItems: 'baseline', gap: 4,
+            padding: '6px 12px', borderRadius: 10,
             background: 'rgba(255,255,255,0.04)',
           }}
         >
           <span
             style={{
-              fontSize: 18,
-              fontWeight: 800,
-              color: T.text,
+              fontSize: 18, fontWeight: 800, color: T.text,
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             }}
           >
@@ -259,18 +234,12 @@ function SessionCard({
 
         <div
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            color: syncColor,
-            fontSize: 13,
-            fontWeight: 700,
+            display: 'flex', alignItems: 'center', gap: 6,
+            color: syncColor, fontSize: 13, fontWeight: 700,
           }}
         >
           {syncIcon}
-          <span style={{ fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>
-            {syncLabel}
-          </span>
+          <span style={{ fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>{syncLabel}</span>
         </div>
 
         <div
@@ -284,98 +253,212 @@ function SessionCard({
         </div>
       </button>
 
-      {expanded && <ExpandedRowTable session={session} />}
+      {expanded && <FullRowTable session={session} onCellSave={onCellSave} />}
     </div>
   );
 }
 
-function ExpandedRowTable({ session }: { session: Session }) {
-  const showCols: Column[] = session.columns.slice(0, 4);
-  const rows = session.rows.slice(0, 6);
-  const remaining = Math.max(0, session.completedRows - rows.length);
+// ─── full editable table ───────────────────────────────────────
+function FullRowTable({
+  session,
+  onCellSave,
+}: {
+  session: Session;
+  onCellSave: (rowIndex: number, colId: string, value: string) => void;
+}) {
+  const cols = session.columns;
+  const rows = session.rows;
+  const colWidthFor = (c: Column) => (c.type === 'date' ? 110 : c.type === 'text' || c.type === 'options' ? 100 : 80);
 
   return (
     <div
       style={{
         borderTop: `1px solid ${T.line}`,
-        padding: '12px 12px 12px',
+        padding: 10,
         background: 'rgba(255,255,255,0.015)',
         animation: 'fade-up 200ms ease-out',
       }}
     >
       <div
         style={{
-          display: 'flex',
-          gap: 8,
-          padding: '6px 8px',
-          fontSize: 12,
-          fontWeight: 700,
-          color: T.textMute,
-          letterSpacing: 0.5,
-          borderBottom: `1px solid ${T.line}`,
+          maxHeight: 360, overflow: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          border: `1px solid ${T.line}`, borderRadius: 8,
         }}
       >
-        <div style={{ width: 28, flexShrink: 0 }}>#</div>
-        {showCols.map((c) => (
+        <div style={{ minWidth: 'max-content' }}>
+          {/* header */}
           <div
-            key={c.id}
             style={{
-              flex: 1,
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              display: 'flex', gap: 0,
+              position: 'sticky', top: 0, zIndex: 2,
+              background: T.card,
+              borderBottom: `1px solid ${T.line}`,
             }}
           >
-            {c.name}
-          </div>
-        ))}
-      </div>
-
-      {rows.map((r, i) => (
-        <div
-          key={r.index}
-          style={{
-            display: 'flex',
-            gap: 8,
-            padding: '8px 8px',
-            fontSize: 14,
-            color: T.text,
-            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            borderBottom: i < rows.length - 1 ? `1px solid ${T.line}` : 'none',
-          }}
-        >
-          <div style={{ width: 28, flexShrink: 0, color: T.textMute }}>{r.index}</div>
-          {showCols.map((c) => (
             <div
-              key={c.id}
               style={{
-                flex: 1,
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                color: c.mode !== 'voice' ? T.textDim : T.text,
+                width: 40, padding: '8px 6px',
+                fontSize: 12, fontWeight: 700, color: T.textMute,
+                textAlign: 'center', position: 'sticky', left: 0, background: T.card, zIndex: 3,
+                borderRight: `1px solid ${T.line}`,
               }}
             >
-              {r.values[c.id] ?? '—'}
+              #
+            </div>
+            {cols.map((c) => (
+              <div
+                key={c.id}
+                style={{
+                  width: colWidthFor(c),
+                  padding: '8px 8px',
+                  fontSize: 12, fontWeight: 700, color: T.textDim,
+                  borderRight: `1px solid ${T.line}`,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+              >
+                {c.name}
+              </div>
+            ))}
+          </div>
+
+          {/* rows */}
+          {rows.map((r) => (
+            <div
+              key={r.index}
+              style={{
+                display: 'flex',
+                borderBottom: `1px solid ${T.line}`,
+                background: 'transparent',
+              }}
+            >
+              <div
+                style={{
+                  width: 40, padding: '8px 6px',
+                  fontSize: 13, color: T.textMute, textAlign: 'center',
+                  position: 'sticky', left: 0, background: T.card, zIndex: 1,
+                  borderRight: `1px solid ${T.line}`,
+                  fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontWeight: 700,
+                }}
+              >
+                {r.index}
+              </div>
+              {cols.map((c) => (
+                <EditableCell
+                  key={c.id}
+                  col={c}
+                  value={r.values[c.id] ?? ''}
+                  width={colWidthFor(c)}
+                  onSave={(v) => onCellSave(r.index, c.id, v)}
+                />
+              ))}
             </div>
           ))}
-        </div>
-      ))}
 
-      {remaining > 0 && (
-        <div
+          {rows.length === 0 && (
+            <div
+              style={{
+                padding: 14, textAlign: 'center', fontSize: 13, color: T.textMute,
+              }}
+            >
+              이 세션에 저장된 행이 없습니다
+            </div>
+          )}
+        </div>
+      </div>
+      <div
+        style={{
+          paddingTop: 8,
+          fontSize: 12, color: T.textMute,
+          textAlign: 'center',
+        }}
+      >
+        총 {rows.length}행 · 셀을 탭하면 수정할 수 있습니다
+      </div>
+    </div>
+  );
+}
+
+function EditableCell({
+  col, value, width, onSave,
+}: {
+  col: Column;
+  value: string;
+  width: number;
+  onSave: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [local, setLocal] = useState(value);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!editing) setLocal(value);
+  }, [value, editing]);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  const commit = () => {
+    if (local !== value) onSave(local);
+    setEditing(false);
+  };
+  const cancel = () => {
+    setLocal(value);
+    setEditing(false);
+  };
+
+  const isVoice = col.input === 'voice';
+  const inputMode =
+    col.type === 'int' ? 'numeric'
+    : col.type === 'float' ? 'decimal'
+    : 'text';
+
+  return (
+    <div
+      style={{
+        width, padding: 0,
+        borderRight: `1px solid ${T.line}`,
+        background: editing ? 'rgba(41,121,255,0.08)' : 'transparent',
+      }}
+    >
+      {editing ? (
+        <input
+          ref={inputRef}
+          value={local}
+          inputMode={inputMode as 'numeric' | 'decimal' | 'text'}
+          onChange={(e) => setLocal(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit();
+            else if (e.key === 'Escape') cancel();
+          }}
           style={{
-            textAlign: 'center',
-            padding: '10px 0 4px',
-            fontSize: 13,
-            color: T.textMute,
-            fontWeight: 600,
+            width: '100%', height: '100%',
+            padding: '8px 8px',
+            background: 'transparent', border: 'none', outline: 'none',
+            color: T.text,
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            fontSize: 14, fontWeight: 700,
+            minHeight: 36,
+          }}
+        />
+      ) : (
+        <button
+          onClick={() => setEditing(true)}
+          style={{
+            width: '100%', minHeight: 36,
+            padding: '8px 8px',
+            background: 'transparent', border: 'none',
+            color: isVoice ? T.text : T.textDim,
+            fontSize: 14, fontWeight: 700,
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            textAlign: 'left', cursor: 'pointer',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}
         >
-          … +{remaining}행
-        </div>
+          {value || <span style={{ color: T.textMute, opacity: 0.5 }}>—</span>}
+        </button>
       )}
     </div>
   );
@@ -385,25 +468,17 @@ function EmptyState() {
   return (
     <div
       style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 18,
-        padding: '40px 32px',
+        flex: 1, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        gap: 18, padding: '40px 32px',
       }}
     >
       <div
         style={{
-          width: 110,
-          height: 110,
-          borderRadius: '50%',
+          width: 110, height: 110, borderRadius: '50%',
           background: 'rgba(255,255,255,0.03)',
           border: `1px dashed ${T.lineStrong}`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: T.textMute,
         }}
       >
@@ -411,18 +486,13 @@ function EmptyState() {
       </div>
       <div
         style={{
-          fontSize: 17,
-          fontWeight: 700,
-          color: T.textDim,
-          letterSpacing: -0.2,
-          textAlign: 'center',
+          fontSize: 17, fontWeight: 700, color: T.textDim,
+          letterSpacing: -0.2, textAlign: 'center',
         }}
       >
         아직 기록된 데이터가 없습니다
       </div>
-      <div
-        style={{ fontSize: 14, color: T.textMute, textAlign: 'center', lineHeight: 1.5 }}
-      >
+      <div style={{ fontSize: 14, color: T.textMute, textAlign: 'center', lineHeight: 1.5 }}>
         입력 탭에서 음성 세션을 시작하면<br />이곳에 표시됩니다
       </div>
     </div>

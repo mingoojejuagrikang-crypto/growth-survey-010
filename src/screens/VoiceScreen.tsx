@@ -1,7 +1,5 @@
 import { T } from '../tokens';
 import { I } from '../components/icons';
-import { Chip } from '../components/Chip';
-import { MicWave } from '../components/MicWave';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
@@ -9,6 +7,7 @@ import { computeTotalRows, nestedAutoValue } from '../lib/autoValue';
 import { useWakeLock, lockPortrait } from '../lib/wakeLock';
 import { useVoiceSession } from '../lib/useVoiceSession';
 import { isSpeechSupported } from '../lib/speech';
+import type { Column } from '../types';
 
 export function VoiceScreen() {
   const s = useSettingsStore();
@@ -18,16 +17,16 @@ export function VoiceScreen() {
   useWakeLock(sess.phase === 'active' || sess.phase === 'complete');
 
   const totalRows = s.tableGenerated ? computeTotalRows(s.columns) : 0;
-  const voiceCols = s.columns.filter((c) => c.mode === 'voice');
+  const voiceCols = s.columns.filter((c) => c.input === 'voice');
   const currentCol = voiceCols[sess.activeColIdx] || voiceCols[0] || s.columns[0];
 
-  const autoChips = s.columns
-    .filter((c) => c.mode !== 'voice')
-    .slice(0, 6)
-    .map((c) => ({ name: c.name, value: nestedAutoValue(s.columns, c, sess.activeRow) }));
-
   if (sess.phase === 'ready') {
-    return <ReadyState totalRows={totalRows} onStart={() => voiceSession.start().then(() => lockPortrait())} />;
+    return (
+      <ReadyState
+        totalRows={totalRows}
+        onStart={() => voiceSession.start().then(() => lockPortrait())}
+      />
+    );
   }
 
   return (
@@ -42,10 +41,13 @@ export function VoiceScreen() {
     >
       <ActiveState
         totalRows={totalRows}
-        autoChips={autoChips}
+        columns={s.columns}
+        voiceCols={voiceCols}
         currentColName={currentCol?.name || '—'}
+        currentColId={currentCol?.id}
         completing={sess.phase === 'complete'}
         onEnd={() => voiceSession.stop()}
+        onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
       />
     </div>
   );
@@ -55,13 +57,12 @@ export function VoiceScreen() {
 function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => void }) {
   const s = useSettingsStore();
   const ready = s.tableGenerated && totalRows > 0 && isSpeechSupported();
-  const voiceCount = s.columns.filter((c) => c.mode === 'voice').length;
+  const voiceCount = s.columns.filter((c) => c.input === 'voice').length;
   const ttsHint = !isSpeechSupported()
     ? '이 브라우저는 음성 인식을 지원하지 않습니다 (Chrome 권장)'
     : !s.tableGenerated
     ? '먼저 설정 탭에서 테이블을 생성하세요'
     : '이어폰을 끼고 시작하세요';
-  const start = onStart;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -146,7 +147,7 @@ function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => 
       <div style={{ padding: '0 16px 12px' }}>
         <button
           disabled={!ready}
-          onClick={start}
+          onClick={onStart}
           style={{
             width: '100%',
             height: 60,
@@ -173,16 +174,8 @@ function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => 
 }
 
 function SummaryCol({
-  label,
-  value,
-  unit,
-  accent,
-}: {
-  label: string;
-  value: number;
-  unit?: string;
-  accent?: boolean;
-}) {
+  label, value, unit, accent,
+}: { label: string; value: number; unit?: string; accent?: boolean }) {
   return (
     <div style={{ flex: 1 }}>
       <div style={{ fontSize: 10, color: T.textMute, fontWeight: 700, letterSpacing: 0.7 }}>
@@ -190,10 +183,8 @@ function SummaryCol({
       </div>
       <div
         style={{
-          fontSize: 22,
-          fontWeight: 800,
-          color: accent ? T.blue : T.text,
-          marginTop: 2,
+          fontSize: 22, fontWeight: 800,
+          color: accent ? T.blue : T.text, marginTop: 2,
           letterSpacing: -0.6,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
         }}
@@ -216,202 +207,189 @@ function Divider() {
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
   totalRows,
-  autoChips,
+  columns,
+  voiceCols,
   currentColName,
+  currentColId,
   completing,
   onEnd,
+  onRestartFromCol,
 }: {
   totalRows: number;
-  autoChips: { name: string; value: string }[];
+  columns: Column[];
+  voiceCols: Column[];
   currentColName: string;
+  currentColId?: string;
   completing: boolean;
   onEnd: () => void;
+  onRestartFromCol: (id: string) => void;
 }) {
   const sess = useSessionStore();
   const row = sess.activeRow;
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
-  const end = onEnd;
+
+  // For each column, compute current row's display value and progress state
+  const colDisplays = columns.map((c) => {
+    const isVoice = c.input === 'voice';
+    let value: string;
+    if (isVoice) {
+      value = sess.currentRowValues[c.id] ?? '';
+    } else {
+      value = nestedAutoValue(columns, c, row);
+    }
+    const isActive = c.id === currentColId;
+    const isDone = isVoice && !!sess.currentRowValues[c.id];
+    return { col: c, value, isActive, isDone, isVoice };
+  });
 
   return (
     <>
-      {/* Top progress bar */}
-      <div style={{ padding: '12px 18px 8px', flexShrink: 0 }}>
+      {/* Top: row indicator (very large) + thin progress + REC */}
+      <div style={{ padding: '12px 18px 4px', flexShrink: 0 }}>
         <div
           style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            justifyContent: 'space-between',
-            marginBottom: 6,
+            display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, whiteSpace: 'nowrap' }}>
-            <span style={{ fontSize: 11, color: T.textDim, fontWeight: 600, letterSpacing: 0.5 }}>
-              행
-            </span>
+          <div
+            style={{
+              display: 'flex', alignItems: 'baseline', gap: 6, whiteSpace: 'nowrap',
+              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            }}
+          >
             <span
               style={{
-                fontSize: 20,
-                fontWeight: 800,
-                color: T.text,
-                fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                letterSpacing: -0.5,
+                fontSize: 72, fontWeight: 800, color: T.text,
+                letterSpacing: -3, lineHeight: 1,
               }}
             >
               {row}
             </span>
-            <span
-              style={{
-                fontSize: 13,
-                color: T.textMute,
-                fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-              }}
-            >
+            <span style={{ fontSize: 24, fontWeight: 700, color: T.textMute, letterSpacing: -0.5 }}>
               / {totalRows}
             </span>
+            <span style={{ fontSize: 14, color: T.textDim, marginLeft: 8 }}>행</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div
               style={{
-                width: 6,
-                height: 6,
-                borderRadius: '50%',
-                background: T.red,
+                width: 8, height: 8, borderRadius: '50%', background: T.red,
                 animation: 'pulse-mic 1.2s ease-in-out infinite',
               }}
             />
-            <span style={{ fontSize: 10, color: T.red, fontWeight: 700, letterSpacing: 0.7 }}>
+            <span style={{ fontSize: 12, color: T.red, fontWeight: 700, letterSpacing: 0.7 }}>
               REC
             </span>
           </div>
         </div>
         <div
           style={{
-            position: 'relative',
-            height: 4,
-            borderRadius: 2,
+            marginTop: 6,
+            position: 'relative', height: 4, borderRadius: 2,
             background: 'rgba(255,255,255,0.08)',
           }}
         >
           <div
             style={{
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              bottom: 0,
-              borderRadius: 2,
+              position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 2,
               width: `${pct}%`,
               background: completing ? T.green : T.blue,
               transition: 'width 400ms ease-out, background 200ms',
               boxShadow: completing ? `0 0 12px ${T.green}` : `0 0 8px ${T.blueGlow}`,
             }}
           />
-          {completing && (
-            <div
-              style={{
-                position: 'absolute',
-                right: `${100 - pct}%`,
-                top: -6,
-                width: 16,
-                height: 16,
-                borderRadius: '50%',
-                background: T.green,
-                transform: 'translateX(50%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                animation: 'check-pop 400ms ease-out',
-                boxShadow: `0 0 12px ${T.green}`,
-              }}
-            >
-              {I.check(10, '#fff')}
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Auto-filled chips */}
+      {/* Column strip — all cols, highlight current, tap voice to restart */}
       <div
         style={{
-          padding: '6px 14px 8px',
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 6,
+          padding: '8px 12px',
+          display: 'flex', flexWrap: 'wrap', gap: 6,
+          borderTop: `1px solid ${T.line}`,
           borderBottom: `1px solid ${T.line}`,
-          minHeight: 56,
-          alignContent: 'flex-start',
-          flexShrink: 0,
+          alignContent: 'flex-start', flexShrink: 0,
+          maxHeight: 116, overflowY: 'auto',
         }}
       >
-        <span
-          style={{
-            fontSize: 9,
-            color: T.textMute,
-            fontWeight: 700,
-            letterSpacing: 0.6,
-            width: '100%',
-            marginBottom: 2,
-          }}
-        >
-          자동 입력값
-        </span>
-        {autoChips.map((c, i) => (
-          <Chip key={i} color={T.textDim} bg="rgba(255,255,255,0.05)">
-            <span style={{ color: T.textMute }}>{c.name}:</span>
-            <span
+        {colDisplays.map(({ col, value, isActive, isDone, isVoice }) => {
+          const bg = isActive
+            ? T.blueGlow
+            : isDone
+            ? 'rgba(0,200,83,0.12)'
+            : 'rgba(255,255,255,0.05)';
+          const border = isActive
+            ? T.blue
+            : isDone
+            ? 'rgba(0,200,83,0.35)'
+            : 'transparent';
+          const cursor = isVoice ? 'pointer' : 'default';
+          return (
+            <button
+              key={col.id}
+              onClick={() => isVoice && onRestartFromCol(col.id)}
+              disabled={!isVoice}
               style={{
-                fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                color: T.text,
-                fontWeight: 600,
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '6px 10px', borderRadius: 10,
+                fontSize: 14,
+                background: bg,
+                border: `1.5px solid ${border}`,
+                color: isActive ? T.text : isDone ? T.text : T.textDim,
+                fontWeight: isActive ? 800 : 600,
+                cursor,
+                whiteSpace: 'nowrap',
+                letterSpacing: -0.1,
+                minHeight: 36,
               }}
             >
-              {c.value}
-            </span>
-          </Chip>
-        ))}
+              {isActive && <span style={{ color: T.blue, fontSize: 12, fontWeight: 900 }}>▶</span>}
+              {isDone && I.check(12, T.green)}
+              <span style={{ color: isActive ? T.blue : T.textMute, fontSize: 12 }}>
+                {col.name}:
+              </span>
+              <span
+                style={{
+                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                  color: isActive ? T.text : isDone ? T.text : T.textDim,
+                  fontWeight: 700,
+                }}
+              >
+                {value || '—'}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Center - current field */}
+      {/* Center: current input target + recognized value */}
       <div
         style={{
-          flex: 1,
-          position: 'relative',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '0 24px',
-          gap: 10,
-          minHeight: 0,
+          flex: 1, position: 'relative',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          padding: '0 24px', gap: 8, minHeight: 0,
         }}
       >
-        <MicWave side="left" tall={140} bars={4} color="rgba(41,121,255,0.5)" />
-        <MicWave side="right" tall={140} bars={4} color="rgba(41,121,255,0.5)" />
-
-        <div style={{ fontSize: 11, color: T.textMute, fontWeight: 700, letterSpacing: 0.8 }}>
+        <div style={{ fontSize: 12, color: T.textMute, fontWeight: 700, letterSpacing: 0.8 }}>
           다음 입력 항목
         </div>
-
         <div
           style={{
-            fontSize: 44,
-            fontWeight: 800,
-            color: T.text,
-            letterSpacing: -1.5,
-            lineHeight: 1,
+            fontSize: 56, fontWeight: 800, color: T.text,
+            letterSpacing: -1.5, lineHeight: 1,
             textShadow: `0 0 24px rgba(41,121,255,0.18)`,
           }}
         >
           {currentColName}
         </div>
 
-        <div style={{ position: 'relative', marginTop: 4, width: 76, height: 76 }}>
+        <div style={{ position: 'relative', marginTop: 6, width: 60, height: 60 }}>
           {[0, 1, 2].map((i) => (
             <div
               key={i}
               style={{
-                position: 'absolute',
-                inset: 0,
-                borderRadius: '50%',
+                position: 'absolute', inset: 0, borderRadius: '50%',
                 border: `1.5px solid ${T.blue}`,
                 animation: `ring-expand 2.4s ease-out ${i * 0.8}s infinite`,
               }}
@@ -419,32 +397,24 @@ function ActiveState({
           ))}
           <div
             style={{
-              width: 76,
-              height: 76,
-              borderRadius: '50%',
+              width: 60, height: 60, borderRadius: '50%',
               background: `radial-gradient(circle at 30% 30%, #5a9bff, ${T.blue} 60%, #1755c9)`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              position: 'relative',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
               animation: 'pulse-mic 1.4s ease-in-out infinite',
-              boxShadow: `0 0 40px ${T.blueGlow}, 0 8px 24px rgba(0,0,0,0.4)`,
+              boxShadow: `0 0 32px ${T.blueGlow}, 0 6px 18px rgba(0,0,0,0.4)`,
             }}
           >
-            {I.micFilled(36, '#fff')}
+            {I.micFilled(28, '#fff')}
           </div>
         </div>
 
         <div
           style={{
-            fontSize: 56,
-            fontWeight: 800,
+            fontSize: 64, fontWeight: 800,
             color: completing ? T.green : T.text,
-            letterSpacing: -2,
-            lineHeight: 1,
-            marginTop: 6,
+            letterSpacing: -2, lineHeight: 1, marginTop: 4,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            minHeight: 56,
+            minHeight: 64,
             textShadow: completing ? `0 0 32px rgba(0,200,83,0.4)` : 'none',
           }}
         >
@@ -457,51 +427,35 @@ function ActiveState({
         style={{
           padding: '8px 16px 6px',
           borderTop: `1px solid ${T.line}`,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-          flexShrink: 0,
+          display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0,
         }}
       >
-        <div style={{ fontSize: 9, color: T.textMute, fontWeight: 700, letterSpacing: 0.6 }}>
+        <div style={{ fontSize: 10, color: T.textMute, fontWeight: 700, letterSpacing: 0.6 }}>
           TTS 응답
         </div>
         <div
           style={{
-            fontSize: 12,
-            color: T.textDim,
-            fontWeight: 500,
-            fontStyle: 'italic',
-            letterSpacing: -0.1,
-            minHeight: 18,
+            fontSize: 13, color: T.textDim, fontWeight: 500,
+            fontStyle: 'italic', letterSpacing: -0.1, minHeight: 18,
           }}
         >
-          {sess.lastTts || `“${currentColName} ${sess.recognizedValue || '...'}, 다음 항목 말씀해 주세요.”`}
+          {sess.lastTts || `${currentColName} 말씀해 주세요.`}
         </div>
       </div>
 
-      {/* Bottom controls */}
+      {/* Bottom: end button */}
       <div
         style={{
           padding: '8px 16px 12px',
-          display: 'flex',
-          gap: 8,
-          alignItems: 'center',
-          flexShrink: 0,
+          display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0,
         }}
       >
         <button
-          onClick={end}
+          onClick={onEnd}
           style={{
-            flex: 1,
-            height: 48,
-            borderRadius: 24,
-            border: `1.5px solid ${T.lineStrong}`,
-            background: 'transparent',
-            color: T.textDim,
-            fontSize: 14,
-            fontWeight: 700,
-            letterSpacing: -0.2,
+            flex: 1, height: 48, borderRadius: 24,
+            border: `1.5px solid ${T.lineStrong}`, background: 'transparent',
+            color: T.textDim, fontSize: 15, fontWeight: 700, letterSpacing: -0.2,
             cursor: 'pointer',
           }}
         >

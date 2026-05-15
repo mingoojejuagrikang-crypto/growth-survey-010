@@ -21,6 +21,7 @@ export const TYPE_LABELS = {
   text: '텍스트',
   int: '정수',
   float: '실수',
+  options: '선택',
 } as const;
 
 export const TYPE_COLORS = {
@@ -28,6 +29,7 @@ export const TYPE_COLORS = {
   text: { fg: '#C9C9D1', bg: 'rgba(201,201,209,0.10)' },
   int: { fg: '#FFB300', bg: 'rgba(255,179,0,0.13)' },
   float: { fg: '#FF9F70', bg: 'rgba(255,159,112,0.13)' },
+  options: { fg: '#A78BFA', bg: 'rgba(167,139,250,0.13)' },
 } as const;
 
 export const DEVICE = {

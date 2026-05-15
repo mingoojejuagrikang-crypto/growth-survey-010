@@ -1,15 +1,21 @@
-export type DataType = 'date' | 'text' | 'int' | 'float';
-export type InputMode = 'auto' | 'voice' | 'silent';
+export type DataType = 'date' | 'text' | 'int' | 'float' | 'options';
+
+/** Legacy mode kept for migration only. New code uses input + ttsAnnounce. */
+export type LegacyInputMode = 'auto' | 'voice' | 'silent';
 
 export type AutoValue =
   | { kind: 'fixed'; value: string }
-  | { kind: 'seq'; from: number; to: number };
+  | { kind: 'seq'; from: number; to: number }
+  | { kind: 'options'; available: string[]; selected: string[] };
 
 export interface Column {
   id: string;
   name: string;
   type: DataType;
-  mode: InputMode;
+  /** 입력 방식: 자동 채움 vs 사용자 음성 입력 */
+  input: 'auto' | 'voice';
+  /** TTS로 안내할지 (auto일 땐 자동값 읽기, voice일 땐 항목명 안내) */
+  ttsAnnounce: boolean;
   auto: AutoValue;
   /** decimal places when type === 'float' (default 1) */
   decimals?: number;
@@ -28,6 +34,7 @@ export interface AppSettings {
   sheet: SheetConfig | null;
   manualMode: boolean;
   columns: Column[];
+  ttsRate: number;
 }
 
 /** A single row in the day's pre-built table */

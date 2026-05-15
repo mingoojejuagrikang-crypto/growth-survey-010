@@ -12,6 +12,11 @@ interface DataState {
   toggleExpand: (id: string) => void;
   markSynced: (id: string, count: number) => void;
   setHydrated: (b: boolean) => void;
+  /**
+   * Edit a single cell. If the edited row index is <= syncedRows,
+   * we drop syncedRows back so the row will be re-pushed.
+   */
+  updateRowValue: (sessionId: string, rowIndex: number, colId: string, value: string) => void;
 }
 
 export const useDataStore = create<DataState>((set) => ({
@@ -37,4 +42,17 @@ export const useDataStore = create<DataState>((set) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, syncedRows: count } : s)),
     })),
   setHydrated: (hydrated) => set({ hydrated }),
+  updateRowValue: (sessionId, rowIndex, colId, value) =>
+    set((state) => {
+      const sessions = state.sessions.map((s) => {
+        if (s.id !== sessionId) return s;
+        const rows = s.rows.map((r) =>
+          r.index === rowIndex ? { ...r, values: { ...r.values, [colId]: value } } : r,
+        );
+        // If the edited row was previously synced, demote.
+        const newSynced = Math.min(s.syncedRows, rowIndex - 1);
+        return { ...s, rows, syncedRows: Math.max(0, newSynced) };
+      });
+      return { sessions };
+    }),
 }));
