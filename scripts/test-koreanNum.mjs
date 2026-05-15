@@ -43,6 +43,10 @@ const cmdCases = [
   ['다시', 'redo'],
   ['종료', 'end'],
   ['스톱', 'end'],
+  ['스킵', 'skip'],
+  ['건너', 'skip'],
+  ['패스', 'skip'],
+  ['다음', 'skip'],
   ['삼', null],
 ];
 for (const [input, expected] of cmdCases) {

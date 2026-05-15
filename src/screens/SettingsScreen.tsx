@@ -756,6 +756,19 @@ export function SettingsScreen() {
             </button>
           </div>
         </div>
+
+        {/* Footer: version + build date */}
+        <div
+          style={{
+            marginTop: 18, padding: '12px 16px 8px',
+            textAlign: 'center',
+            fontSize: 11, color: T.textMute,
+            letterSpacing: 0.2,
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+          }}
+        >
+          growth-survey-010 · v{__APP_VERSION__} · {__BUILD_DATE__}
+        </div>
       </div>
 
       {/* Action bar */}

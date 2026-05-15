@@ -111,6 +111,12 @@ export const I: Record<string, IconFn> = {
       <rect x="6" y="6" width="12" height="12" rx="2" />
     </svg>
   ),
+  close: (s = 16, c = 'currentColor') => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="6" y1="6" x2="18" y2="18" />
+      <line x1="18" y1="6" x2="6" y2="18" />
+    </svg>
+  ),
 };
 
 export function AuthMark({ s = 18 }: { s?: number }) {

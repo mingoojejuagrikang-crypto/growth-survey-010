@@ -6,7 +6,6 @@ import { DataScreen } from './screens/DataScreen';
 import { T, DEVICE } from './tokens';
 import { useDataStore } from './stores/dataStore';
 import { loadAllSessions } from './lib/db';
-import { installAutoSync } from './lib/sync';
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('settings');
@@ -18,10 +17,10 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Hydrate data store from IndexedDB once on mount + install auto-sync
+  // Hydrate data store from IndexedDB once on mount.
+  // Auto-sync intentionally disabled — user explicitly picks sessions in DataScreen.
   useEffect(() => {
     let cancelled = false;
-    installAutoSync();
     (async () => {
       try {
         const sessions = await loadAllSessions();

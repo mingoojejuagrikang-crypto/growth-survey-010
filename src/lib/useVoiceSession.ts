@@ -4,7 +4,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { parseKoreanNumber, detectCommand, extractModifyValue } from './koreanNum';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts } from './speech';
-import { computeTotalRows, nestedAutoValue } from './autoValue';
+import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
 import { saveSession } from './db';
 
@@ -12,208 +12,315 @@ interface AwaitingField {
   row: number;
   colId: string;
   name: string;
-  /** When true the next final result is treated as the modify value for this field */
+  /** When true the next final result is treated as the modify value */
   isModify?: boolean;
-  /** When isModify, where to return after applying */
-  returnIdx?: number;
 }
 
-/**
- * Orchestrates a full voice-input session.
- * Public API:
- *   - start(): kick off TTS + STT
- *   - stop(announce): end session
- *   - restartFromCol(colId): jump back to a voice column, clearing it + subsequent values
- */
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
-  const completedRowsRef = useRef<SessionRow[]>([]);
   const sessionIdRef = useRef<string>('');
-  const prevRowValuesRef = useRef<Record<string, string> | null>(null);
   const awaitingFieldRef = useRef<AwaitingField | null>(null);
 
-  // ── helpers ──────────────────────────────────────────────────
+  // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
-
   const say = useCallback(async (text: string, interrupt = true) => {
+    if (!text) return;
     await speak(text, { interrupt, rate: getTtsRate() });
   }, []);
 
-  const getColById = useCallback((id: string): Column | null => {
-    return useSettingsStore.getState().columns.find((c) => c.id === id) || null;
-  }, []);
+  const getColById = (id: string): Column | null =>
+    useSettingsStore.getState().columns.find((c) => c.id === id) || null;
 
-  const voiceCols = useCallback((): Column[] => {
-    return useSettingsStore.getState().columns.filter((c) => c.input === 'voice');
-  }, []);
+  const voiceColsList = (): Column[] =>
+    useSettingsStore.getState().columns.filter((c) => c.input === 'voice');
 
-  const recordValue = useCallback((colId: string, value: string) => {
-    useSessionStore.getState().setRowValue(colId, value);
-  }, []);
+  const isRowVoiceComplete = (row: number, vCols: Column[]): boolean => {
+    if (useSessionStore.getState().isRowComplete(row)) return true;
+    const values = useSessionStore.getState().getRowValues(row);
+    return vCols.every((c) => Object.prototype.hasOwnProperty.call(values, c.id));
+  };
 
-  // ── progression helpers ──────────────────────────────────────
-  const announceField = useCallback(async (col: Column, opts?: { isModify?: boolean; returnIdx?: number }) => {
-    awaitingFieldRef.current = {
-      row: useSessionStore.getState().activeRow,
-      colId: col.id,
-      name: col.name,
-      isModify: opts?.isModify,
-      returnIdx: opts?.returnIdx,
-    };
-    let hint = `${col.name} 말씀해 주세요.`;
-    if (col.type === 'options' && col.auto.kind === 'options') {
-      const sel = col.auto.selected.join(', ');
-      if (sel) hint = `${col.name} (${sel} 중 선택) 말씀해 주세요.`;
+  const firstIncompleteColIdx = (row: number, vCols: Column[]): number => {
+    const values = useSessionStore.getState().getRowValues(row);
+    for (let i = 0; i < vCols.length; i++) {
+      if (!Object.prototype.hasOwnProperty.call(values, vCols[i].id)) return i;
     }
-    useSessionStore.getState().setLastTts(hint);
-    if (opts?.isModify) {
-      await say(`정정. ${col.name} 다시 말씀해 주세요.`);
-    } else {
-      await say(`${col.name}.`, false);
+    return 0;
+  };
+
+  const findNextIncompleteRow = (start: number, total: number, vCols: Column[]): number | null => {
+    for (let r = start; r <= total; r++) {
+      if (!isRowVoiceComplete(r, vCols)) return r;
     }
-  }, [say]);
+    for (let r = 1; r < start; r++) {
+      if (!isRowVoiceComplete(r, vCols)) return r;
+    }
+    return null;
+  };
 
-  const announceNewRow = useCallback(
-    async (row: number, columns: Column[], prev: Record<string, string> | null) => {
-      const auto = buildAutoValues(columns, row);
-      const toAnnounce = columns
-        .filter((c) => c.input === 'auto' && c.ttsAnnounce)
-        .filter((c) => !prev || prev[c.id] !== auto[c.id])
-        .map((c) => `${c.name} ${auto[c.id]}`);
-
-      if (toAnnounce.length) {
-        const prefix = row === 1 ? '' : `${row}행. `;
-        await say(`${prefix}${toAnnounce.join(', ')}.`, false);
-      } else if (row > 1) {
-        await say(`${row}행.`, false);
-      }
-    },
-    [say],
-  );
-
+  // ── persistence ────────────────────────────────────────────
   const persistSession = useCallback(async () => {
-    const s = useSettingsStore.getState();
-    const rows = completedRowsRef.current;
-    if (rows.length === 0) return;
+    const settings = useSettingsStore.getState();
+    const sess = useSessionStore.getState();
+    const completed = [...sess.completedRows].sort((a, b) => a - b);
+    if (completed.length === 0) return;
+    const rows: SessionRow[] = completed.map((r) => {
+      const auto = buildCyclingValues(settings.columns, r);
+      const fixedAndAuto = autoNonCyclingValues(settings.columns, r);
+      const voiceVals = sess.getRowValues(r);
+      return {
+        index: r,
+        values: { ...fixedAndAuto, ...auto, ...voiceVals },
+        complete: true,
+      };
+    });
     const session: Session = {
       id: sessionIdRef.current,
       date: new Date().toISOString().slice(0, 10),
-      columns: s.columns,
+      columns: settings.columns,
       rows,
       completedRows: rows.length,
       syncedRows: 0,
       startedAt: parseInt(sessionIdRef.current.replace('sess_', ''), 10),
       finishedAt: Date.now(),
     };
-    try {
-      await saveSession(session);
-    } catch {
-      /* IDB unavailable — ignore */
-    }
+    try { await saveSession(session); } catch { /* ignore */ }
     useDataStore.getState().upsertSession(session);
   }, []);
 
-  const finalizeCurrentRow = useCallback(() => {
-    const s = useSettingsStore.getState();
-    const sess = useSessionStore.getState();
-    const auto = buildAutoValues(s.columns, sess.activeRow);
-    const values: Record<string, string> = { ...auto, ...sess.currentRowValues };
-    const row: SessionRow = { index: sess.activeRow, values, complete: true };
-    completedRowsRef.current = [...completedRowsRef.current, row];
-    void persistSession();
-  }, [persistSession]);
+  // ── announcements ──────────────────────────────────────────
+  /** Announce only auto+ttsAnnounce columns whose value differs between rows. */
+  const announceRowDiff = useCallback(
+    async (fromRow: number | null, toRow: number) => {
+      const cols = useSettingsStore.getState().columns;
+      const toAuto = buildCyclingValues(cols, toRow);
+      const fromAuto = fromRow != null ? buildCyclingValues(cols, fromRow) : null;
+      const parts: string[] = [];
+      for (const c of cols) {
+        if (c.input !== 'auto' || !c.ttsAnnounce) continue;
+        const tv = toAuto[c.id] ?? '';
+        const fv = fromAuto?.[c.id] ?? '';
+        if (!tv) continue;
+        if (fromAuto === null || fv !== tv) parts.push(`${c.name} ${tv}`);
+      }
+      if (parts.length) await say(parts.join(', ') + '.', false);
+    },
+    [say],
+  );
 
-  // ── advance to next voice col / next row ─────────────────────
+  const announceField = useCallback(
+    async (col: Column, opts?: { isModify?: boolean }) => {
+      awaitingFieldRef.current = {
+        row: useSessionStore.getState().activeRow,
+        colId: col.id,
+        name: col.name,
+        isModify: opts?.isModify,
+      };
+      const hint = opts?.isModify
+        ? `정정. ${col.name} 다시 말씀해 주세요.`
+        : `${col.name} 말씀해 주세요.`;
+      useSessionStore.getState().setLastTts(hint);
+      await say(opts?.isModify ? `정정. ${col.name}.` : `${col.name}.`, false);
+    },
+    [say],
+  );
+
+  // ── progression ────────────────────────────────────────────
+  /** Move to next voice col in current row, or finalize row + jump to next target. */
   const advance = useCallback(async () => {
-    const s = useSettingsStore.getState();
+    const settings = useSettingsStore.getState();
     const sess = useSessionStore.getState();
-    const vc = voiceCols();
+    const vc = voiceColsList();
     const row = sess.activeRow;
-    const total = computeTotalRows(s.columns);
+    const total = computeTotalRows(settings.columns);
 
-    if (sess.activeColIdx < vc.length - 1) {
-      const nextIdx = sess.activeColIdx + 1;
-      sess.setActiveCol(nextIdx);
+    // Still voice cols in this row?
+    const nextIdx = sess.activeColIdx + 1;
+    if (nextIdx < vc.length) {
+      // Skip cols already filled (in case we're recovering from modify/jump)
+      const values = sess.getRowValues(row);
+      let target = nextIdx;
+      while (target < vc.length && Object.prototype.hasOwnProperty.call(values, vc[target].id)) {
+        target++;
+      }
+      if (target < vc.length) {
+        sess.setActiveCol(target);
+        sess.setRecognized('');
+        await announceField(vc[target]);
+        return;
+      }
+    }
+
+    // All voice cols in this row filled — complete
+    sess.markRowComplete(row);
+    sess.setPhase('complete');
+    void persistSession();
+    await say(`${row}행 완료.`);
+
+    // If returnRow set (came from modify/jump), go back
+    const ret = sess.returnRow;
+    const retCol = sess.returnColIdx;
+    if (ret != null && ret !== row) {
+      sess.setReturn(null, null);
+      const targetCol = retCol ?? firstIncompleteColIdx(ret, vc);
+      sess.setActiveRow(ret);
+      sess.setActiveCol(targetCol);
       sess.setRecognized('');
-      await announceField(vc[nextIdx]);
+      sess.setPhase('active');
+      await announceRowDiff(row, ret);
+      if (vc[targetCol]) await announceField(vc[targetCol]);
       return;
     }
 
-    // Row complete
-    finalizeCurrentRow();
-    sess.setPhase('complete');
-    await say(`${row}행 완료.`);
-
-    if (row >= total) {
+    // Otherwise find next incomplete row
+    const next = findNextIncompleteRow(row + 1, total, vc);
+    if (next === null) {
       sess.setPhase('done');
       await say('모든 입력이 완료되었습니다.');
       await stop(false);
       return;
     }
 
-    const nextRow = row + 1;
-    sess.setActiveRow(nextRow);
-    sess.setActiveCol(0);
-    sess.resetRowValues();
+    sess.setActiveRow(next);
+    const targetCol = firstIncompleteColIdx(next, vc);
+    sess.setActiveCol(targetCol);
+    sess.setRecognized('');
     sess.setPhase('active');
+    await announceRowDiff(row, next);
+    if (vc[targetCol]) await announceField(vc[targetCol]);
+  }, [announceField, announceRowDiff, persistSession, say]);
 
-    await announceNewRow(nextRow, s.columns, prevRowValuesRef.current);
-    prevRowValuesRef.current = buildAutoValues(s.columns, nextRow);
-    if (vc[0]) await announceField(vc[0]);
-  }, [announceField, announceNewRow, finalizeCurrentRow, say, voiceCols]);
-
-  // ── modify / restart ─────────────────────────────────────────
-  /** Enter modify mode: go back to previous voice col, await new value. */
+  // ── modify (cross-row) ─────────────────────────────────────
   const enterModifyMode = useCallback(async (preExtractedValue?: string) => {
     const sess = useSessionStore.getState();
-    const vc = voiceCols();
+    const vc = voiceColsList();
+    const curRow = sess.activeRow;
     const curIdx = sess.activeColIdx;
-    const targetIdx = Math.max(0, curIdx - 1);
-    const target = vc[targetIdx];
-    if (!target) return;
 
-    // If user said "수정 X" with a value attached, apply immediately.
+    // Find previous voice col (could be in previous row)
+    let targetRow = curRow;
+    let targetIdx = curIdx - 1;
+    if (targetIdx < 0) {
+      if (curRow <= 1) {
+        // No previous — treat as redo current
+        sess.setRowValue(curRow, vc[curIdx].id, '');
+        sess.setRecognized('');
+        await announceField(vc[curIdx]);
+        return;
+      }
+      targetRow = curRow - 1;
+      targetIdx = vc.length - 1;
+    }
+
+    // Pre-extracted value? Apply directly.
+    const target = vc[targetIdx];
     if (preExtractedValue) {
       const parsed = parseValueForCol(target, preExtractedValue);
       if (parsed !== null) {
-        recordValue(target.id, parsed);
+        sess.setRowValue(targetRow, target.id, parsed);
+        // If we modified an earlier row, make sure it's still complete
+        if (targetRow < curRow) {
+          // Persist updated row
+          void persistSession();
+        }
         sess.setRecognized(parsed);
         await say(`정정 ${target.name} ${formatForTts(parsed)}`);
-        // After applying modify, re-announce the column we were originally on
-        if (curIdx !== targetIdx) {
-          sess.setActiveCol(curIdx);
-          if (vc[curIdx]) await announceField(vc[curIdx]);
-        } else {
-          await advance();
-        }
+        // Return immediately to where we were
+        sess.setActiveRow(curRow);
+        sess.setActiveCol(curIdx);
+        if (vc[curIdx]) await announceField(vc[curIdx]);
         return;
       }
     }
 
-    // Otherwise enter modify await state
-    recordValue(target.id, '');
+    // Otherwise prepare modify-await on the target column
+    // Important: don't clear the previous value yet; wait for new input.
+    // But UI shows recognized blank.
+    if (targetRow !== curRow) {
+      // mark target row incomplete so it gets re-completed once modified
+      sess.markRowIncomplete(targetRow);
+    }
+    sess.setReturn(curRow, curIdx);
+    sess.setActiveRow(targetRow);
     sess.setActiveCol(targetIdx);
+    sess.setRowValue(targetRow, target.id, '');
     sess.setRecognized('');
-    await announceField(target, { isModify: true, returnIdx: curIdx });
-  }, [advance, announceField, recordValue, say, voiceCols]);
+    await announceField(target, { isModify: true });
+  }, [announceField, persistSession, say]);
 
-  /** Restart from a specific voice column. Clears that col + subsequent voice values. */
+  // ── skip ───────────────────────────────────────────────────
+  const skipRow = useCallback(async () => {
+    const settings = useSettingsStore.getState();
+    const sess = useSessionStore.getState();
+    const vc = voiceColsList();
+    const row = sess.activeRow;
+    const total = computeTotalRows(settings.columns);
+    // Mark all voice cols in current row as empty strings to indicate skipped
+    for (const c of vc) {
+      sess.setRowValue(row, c.id, '');
+    }
+    sess.markRowComplete(row);
+    void persistSession();
+    await say('건너뜁니다.');
+    // Move to next incomplete row
+    const next = findNextIncompleteRow(row + 1, total, vc);
+    if (next === null) {
+      sess.setPhase('done');
+      await say('모든 입력이 완료되었습니다.');
+      await stop(false);
+      return;
+    }
+    sess.setActiveRow(next);
+    const targetCol = firstIncompleteColIdx(next, vc);
+    sess.setActiveCol(targetCol);
+    sess.setRecognized('');
+    await announceRowDiff(row, next);
+    if (vc[targetCol]) await announceField(vc[targetCol]);
+  }, [announceField, announceRowDiff, persistSession, say]);
+
+  // ── public: restart from a voice col (chip tap) ────────────
   const restartFromCol = useCallback(async (colId: string) => {
     const sess = useSessionStore.getState();
-    const vc = voiceCols();
+    const vc = voiceColsList();
     const idx = vc.findIndex((c) => c.id === colId);
     if (idx < 0) return;
+    const row = sess.activeRow;
+    // Clear this and subsequent voice values in the current row
     for (let i = idx; i < vc.length; i++) {
-      recordValue(vc[i].id, '');
+      sess.setRowValue(row, vc[i].id, '');
     }
+    sess.markRowIncomplete(row);
     sess.setActiveCol(idx);
     sess.setRecognized('');
     cancelTts();
     awaitingFieldRef.current = null;
     await announceField(vc[idx]);
-  }, [announceField, recordValue, voiceCols]);
+  }, [announceField]);
 
-  // ── final result handler ─────────────────────────────────────
+  // ── public: jump to a specific row (auto-chip change) ──────
+  const jumpToRow = useCallback(
+    async (targetRow: number, options?: { setReturn?: boolean }) => {
+      const settings = useSettingsStore.getState();
+      const sess = useSessionStore.getState();
+      const vc = voiceColsList();
+      const total = computeTotalRows(settings.columns);
+      if (targetRow < 1 || targetRow > total) return;
+      const cur = sess.activeRow;
+      if (targetRow === cur) return;
+      if (options?.setReturn ?? true) sess.setReturn(cur, sess.activeColIdx);
+      sess.setActiveRow(targetRow);
+      const targetCol = firstIncompleteColIdx(targetRow, vc);
+      sess.setActiveCol(targetCol);
+      sess.setRecognized('');
+      cancelTts();
+      awaitingFieldRef.current = null;
+      await announceRowDiff(cur, targetRow);
+      if (vc[targetCol]) await announceField(vc[targetCol]);
+    },
+    [announceField, announceRowDiff],
+  );
+
+  // ── final result handler ───────────────────────────────────
   const handleFinal = useCallback(async (text: string, _alts: string[]) => {
     const awaiting = awaitingFieldRef.current;
     if (!awaiting) return;
@@ -223,65 +330,50 @@ export function useVoiceSession() {
       await stop(true);
       return;
     }
-
-    // Special: if already in modify mode and a plain value arrives, apply it as the modify
-    if (awaiting.isModify && cmd === null) {
-      const col = getColById(awaiting.colId);
-      const parsed = col ? parseValueForCol(col, text) : null;
-      if (parsed !== null) {
-        recordValue(awaiting.colId, parsed);
-        useSessionStore.getState().setRecognized(parsed);
-        await say(`정정 ${awaiting.name} ${formatForTts(parsed)}`);
-        const returnIdx = awaiting.returnIdx ?? useSessionStore.getState().activeColIdx;
-        const vc = voiceCols();
-        useSessionStore.getState().setActiveCol(returnIdx);
-        useSessionStore.getState().setRecognized('');
-        if (vc[returnIdx]) await announceField(vc[returnIdx]);
-        return;
-      }
-      await say(`${awaiting.name} 다시 말씀해 주세요.`);
+    if (cmd === 'skip') {
+      await skipRow();
       return;
     }
-
     if (cmd === 'modify') {
       const modifyVal = extractModifyValue(text);
       await enterModifyMode(modifyVal || undefined);
       return;
     }
-
     if (cmd === 'cancel' || cmd === 'redo') {
       useSessionStore.getState().setRecognized('');
       await say(`${awaiting.name} 다시 말씀해 주세요.`);
       return;
     }
 
-    // Plain value path
+    // Plain value
     const col = getColById(awaiting.colId);
     const parsed = col ? parseValueForCol(col, text) : null;
     if (parsed === null) {
       await say(`${awaiting.name} 다시 말씀해 주세요.`);
       return;
     }
-    recordValue(awaiting.colId, parsed);
-    useSessionStore.getState().setRecognized(parsed);
-    await say(formatForTts(parsed));
+    const sess = useSessionStore.getState();
+    sess.setRowValue(sess.activeRow, awaiting.colId, parsed);
+    sess.setRecognized(parsed);
+    if (awaiting.isModify) {
+      await say(`정정 ${awaiting.name} ${formatForTts(parsed)}`);
+    } else {
+      await say(formatForTts(parsed));
+    }
     await advance();
-  }, [advance, announceField, enterModifyMode, getColById, recordValue, say, voiceCols]);
+  }, [advance, enterModifyMode, say, skipRow]);
 
-  // ── start / stop ─────────────────────────────────────────────
+  // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async () => {
     const s = useSettingsStore.getState();
     const sess = useSessionStore.getState();
     if (!s.tableGenerated) return false;
-
     const vc = s.columns.filter((c) => c.input === 'voice');
     if (vc.length === 0) return false;
     const total = computeTotalRows(s.columns);
     if (total === 0) return false;
 
     sessionIdRef.current = `sess_${Date.now()}`;
-    completedRowsRef.current = [];
-    prevRowValuesRef.current = null;
     sess.resetAll();
     sess.setPhase('active');
     sess.setActiveRow(1);
@@ -293,9 +385,7 @@ export function useVoiceSession() {
     }
 
     await say('음성 입력을 시작합니다.');
-
-    await announceNewRow(1, s.columns, prevRowValuesRef.current);
-    prevRowValuesRef.current = buildAutoValues(s.columns, 1);
+    await announceRowDiff(null, 1);
 
     ctrlRef.current = new SpeechController({
       onFinal: handleFinal,
@@ -305,7 +395,7 @@ export function useVoiceSession() {
 
     await announceField(vc[0]);
     return true;
-  }, [announceField, announceNewRow, handleFinal, say]);
+  }, [announceField, announceRowDiff, handleFinal, say]);
 
   const stop = useCallback(async (announce = true) => {
     ctrlRef.current?.stop();
@@ -317,17 +407,17 @@ export function useVoiceSession() {
     void persistSession();
   }, [persistSession, say]);
 
-  // Cleanup
+  // unmount cleanup
   useEffect(() => () => {
     ctrlRef.current?.stop();
     cancelTts();
   }, []);
 
-  return { start, stop, restartFromCol };
+  return { start, stop, restartFromCol, jumpToRow };
 }
 
 // ─── helpers ─────────────────────────────────────────────────
-function buildAutoValues(columns: Column[], row: number): Record<string, string> {
+function autoNonCyclingValues(columns: Column[], row: number): Record<string, string> {
   const out: Record<string, string> = {};
   for (const c of columns) {
     if (c.input === 'voice') continue;
@@ -336,7 +426,6 @@ function buildAutoValues(columns: Column[], row: number): Record<string, string>
   return out;
 }
 
-/** Parse a voice transcript into a value appropriate for the column type. */
 function parseValueForCol(col: Column, raw: string): string | null {
   if (col.type === 'options' && col.auto.kind === 'options') {
     return matchOption(raw, col.auto.selected.length ? col.auto.selected : col.auto.available);
@@ -346,7 +435,6 @@ function parseValueForCol(col: Column, raw: string): string | null {
     return t || null;
   }
   if (col.type === 'date') {
-    // simple ISO match; otherwise leave raw
     const m = raw.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
     if (m) {
       const [, y, mo, d] = m;
@@ -354,7 +442,6 @@ function parseValueForCol(col: Column, raw: string): string | null {
     }
     return raw.trim() || null;
   }
-  // int / float
   const decimals = col.type === 'float' ? col.decimals ?? 1 : col.type === 'int' ? 0 : undefined;
   return parseKoreanNumber(raw, decimals);
 }

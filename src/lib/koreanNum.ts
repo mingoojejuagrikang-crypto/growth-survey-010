@@ -225,13 +225,14 @@ function formatNum(n: number, maxDecimals?: number): string {
 }
 
 // ─── Voice commands ────────────────────────────────────────────
-export type VoiceCommand = 'modify' | 'cancel' | 'redo' | 'end' | null;
+export type VoiceCommand = 'modify' | 'cancel' | 'redo' | 'end' | 'skip' | null;
 
 export function detectCommand(raw: string): VoiceCommand {
   const s = raw.replace(/[\s.,]+/g, '');
   if (/^(수정|정정)/.test(s)) return 'modify';
   if (/^(취소|지우기|지워)/.test(s)) return 'cancel';
   if (/^(다시|재입력)/.test(s)) return 'redo';
+  if (/^(스킵|건너|패스|다음)/.test(s)) return 'skip';
   if (/^(종료|끝|마침|스톱|stop)/i.test(s)) return 'end';
   return null;
 }

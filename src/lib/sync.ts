@@ -13,19 +13,22 @@ export interface SyncReport {
 }
 
 /**
- * Push every unsynced row of every session to the connected Sheets tab.
- * Returns counts so the UI can render a summary toast.
+ * Push the listed session IDs to the configured Sheets tab.
+ * Each session's rows after `syncedRows` are appended.
  */
-export async function syncAll(): Promise<SyncReport> {
+export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
   const settings = useSettingsStore.getState();
   const data = useDataStore.getState();
 
+  if (sessionIds.length === 0) {
+    return { ok: 0, failed: 0, rows: 0, message: '선택된 세션이 없습니다.' };
+  }
   if (!getAccessToken()) {
     return { ok: 0, failed: 0, rows: 0, message: 'Google 로그인이 필요합니다.' };
   }
   const spreadsheetId = parseSpreadsheetId(settings.sheetUrl);
   if (!spreadsheetId) {
-    return { ok: 0, failed: 0, rows: 0, message: '스프레드시트 URL이 설정되지 않았습니다.' };
+    return { ok: 0, failed: 0, rows: 0, message: '스프레드시트 URL을 설정하세요.' };
   }
   if (!settings.sheetTab) {
     return { ok: 0, failed: 0, rows: 0, message: '시트 탭을 선택하세요.' };
@@ -35,12 +38,17 @@ export async function syncAll(): Promise<SyncReport> {
   let failed = 0;
   let totalRows = 0;
 
-  for (const session of data.sessions) {
+  for (const id of sessionIds) {
+    const session = data.sessions.find((x) => x.id === id);
+    if (!session) {
+      failed++;
+      continue;
+    }
     if (session.syncedRows >= session.completedRows) continue;
     const pending = session.rows.slice(session.syncedRows);
     if (pending.length === 0) continue;
     const colIds = session.columns.map((c) => c.id);
-    const matrix = pending.map((row) => colIds.map((id) => row.values[id] ?? ''));
+    const matrix = pending.map((row) => colIds.map((colId) => row.values[colId] ?? ''));
     try {
       await appendRows(spreadsheetId, settings.sheetTab, matrix);
       const updated: Session = { ...session, syncedRows: session.completedRows };
@@ -54,14 +62,4 @@ export async function syncAll(): Promise<SyncReport> {
     }
   }
   return { ok, failed, rows: totalRows };
-}
-
-/** Auto-trigger on `online` event. */
-let onlineHandlerInstalled = false;
-export function installAutoSync() {
-  if (onlineHandlerInstalled) return;
-  onlineHandlerInstalled = true;
-  window.addEventListener('online', () => {
-    void syncAll();
-  });
 }
