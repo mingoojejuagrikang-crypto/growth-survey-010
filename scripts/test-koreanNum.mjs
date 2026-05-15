@@ -47,6 +47,10 @@ const cmdCases = [
   ['건너', 'skip'],
   ['패스', 'skip'],
   ['다음', 'skip'],
+  ['일시정지', 'pause'],
+  ['정지', 'pause'],
+  ['멈춤', 'pause'],
+  ['일시중지', 'pause'],
   ['삼', null],
 ];
 for (const [input, expected] of cmdCases) {

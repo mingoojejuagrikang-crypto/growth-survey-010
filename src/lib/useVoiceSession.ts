@@ -19,6 +19,7 @@ interface AwaitingField {
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
   const sessionIdRef = useRef<string>('');
+  const sessionLabelRef = useRef<string | undefined>(undefined);
   const awaitingFieldRef = useRef<AwaitingField | null>(null);
 
   // ── helpers ────────────────────────────────────────────────
@@ -77,6 +78,7 @@ export function useVoiceSession() {
     const session: Session = {
       id: sessionIdRef.current,
       date: new Date().toISOString().slice(0, 10),
+      label: sessionLabelRef.current,
       columns: settings.columns,
       rows,
       completedRows: rows.length,
@@ -330,6 +332,10 @@ export function useVoiceSession() {
       await stop(true);
       return;
     }
+    if (cmd === 'pause') {
+      await pause();
+      return;
+    }
     if (cmd === 'skip') {
       await skipRow();
       return;
@@ -364,7 +370,7 @@ export function useVoiceSession() {
   }, [advance, enterModifyMode, say, skipRow]);
 
   // ── start / stop ───────────────────────────────────────────
-  const start = useCallback(async () => {
+  const start = useCallback(async (label?: string) => {
     const s = useSettingsStore.getState();
     const sess = useSessionStore.getState();
     if (!s.tableGenerated) return false;
@@ -374,6 +380,7 @@ export function useVoiceSession() {
     if (total === 0) return false;
 
     sessionIdRef.current = `sess_${Date.now()}`;
+    sessionLabelRef.current = label?.trim() || undefined;
     sess.resetAll();
     sess.setPhase('active');
     sess.setActiveRow(1);
@@ -407,13 +414,40 @@ export function useVoiceSession() {
     void persistSession();
   }, [persistSession, say]);
 
+  /** Pause STT + TTS without finalizing. UI shows paused state. */
+  const pause = useCallback(async () => {
+    ctrlRef.current?.stop();
+    ctrlRef.current = null;
+    cancelTts();
+    useSessionStore.getState().setPhase('paused');
+    useSessionStore.getState().setLastTts('일시정지됨. 마이크 다시 탭하면 재개됩니다.');
+    await say('일시정지.');
+  }, [say]);
+
+  /** Resume from paused: restart STT and re-announce current field. */
+  const resume = useCallback(async () => {
+    const sess = useSessionStore.getState();
+    if (sess.phase !== 'paused') return;
+    sess.setPhase('active');
+    ctrlRef.current = new SpeechController({
+      onFinal: handleFinal,
+      onError: () => {},
+    });
+    ctrlRef.current.start();
+    // Re-announce current voice column
+    const vc = voiceColsList();
+    const cur = vc[sess.activeColIdx];
+    if (cur) await announceField(cur);
+    else await say('재개합니다.');
+  }, [announceField, handleFinal, say]);
+
   // unmount cleanup
   useEffect(() => () => {
     ctrlRef.current?.stop();
     cancelTts();
   }, []);
 
-  return { start, stop, restartFromCol, jumpToRow };
+  return { start, stop, restartFromCol, jumpToRow, pause, resume };
 }
 
 // ─── helpers ─────────────────────────────────────────────────
@@ -442,7 +476,13 @@ function parseValueForCol(col: Column, raw: string): string | null {
     }
     return raw.trim() || null;
   }
-  const decimals = col.type === 'float' ? col.decimals ?? 1 : col.type === 'int' ? 0 : undefined;
+  // int: strict — reject if the user pronounced a decimal
+  if (col.type === 'int') {
+    if (/[점쩜.]/.test(raw)) return null;
+    return parseKoreanNumber(raw, 0);
+  }
+  // float
+  const decimals = col.decimals ?? 1;
   return parseKoreanNumber(raw, decimals);
 }
 

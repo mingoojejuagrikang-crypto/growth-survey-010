@@ -5,11 +5,19 @@ import { saveSession } from './db';
 import { getAccessToken } from './googleAuth';
 import type { Session } from '../types';
 
+export interface SyncFailure {
+  sessionId: string;
+  sessionDate: string;
+  sessionLabel?: string;
+  reason: string;
+}
+
 export interface SyncReport {
   ok: number;
   failed: number;
   rows: number;
   message?: string;
+  failures: SyncFailure[];
 }
 
 /**
@@ -19,29 +27,34 @@ export interface SyncReport {
 export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
   const settings = useSettingsStore.getState();
   const data = useDataStore.getState();
+  const report: SyncReport = { ok: 0, failed: 0, rows: 0, failures: [] };
 
   if (sessionIds.length === 0) {
-    return { ok: 0, failed: 0, rows: 0, message: '선택된 세션이 없습니다.' };
+    report.message = '선택된 세션이 없습니다.';
+    return report;
   }
   if (!getAccessToken()) {
-    return { ok: 0, failed: 0, rows: 0, message: 'Google 로그인이 필요합니다.' };
+    report.message = 'Google 로그인이 필요합니다. 설정 탭에서 로그인 후 다시 시도하세요.';
+    return report;
   }
   const spreadsheetId = parseSpreadsheetId(settings.sheetUrl);
   if (!spreadsheetId) {
-    return { ok: 0, failed: 0, rows: 0, message: '스프레드시트 URL을 설정하세요.' };
+    report.message = '스프레드시트 URL을 설정하세요.';
+    return report;
   }
   if (!settings.sheetTab) {
-    return { ok: 0, failed: 0, rows: 0, message: '시트 탭을 선택하세요.' };
+    report.message = '시트 탭을 선택하세요.';
+    return report;
   }
-
-  let ok = 0;
-  let failed = 0;
-  let totalRows = 0;
 
   for (const id of sessionIds) {
     const session = data.sessions.find((x) => x.id === id);
     if (!session) {
-      failed++;
+      report.failed++;
+      report.failures.push({
+        sessionId: id, sessionDate: '?',
+        reason: '세션을 찾을 수 없습니다.',
+      });
       continue;
     }
     if (session.syncedRows >= session.completedRows) continue;
@@ -54,12 +67,18 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
       const updated: Session = { ...session, syncedRows: session.completedRows };
       data.upsertSession(updated);
       await saveSession(updated);
-      ok++;
-      totalRows += pending.length;
+      report.ok++;
+      report.rows += pending.length;
     } catch (err) {
-      failed++;
+      report.failed++;
+      report.failures.push({
+        sessionId: session.id,
+        sessionDate: session.date,
+        sessionLabel: session.label,
+        reason: (err as Error).message || '알 수 없는 오류',
+      });
       console.error('sync failed for', session.id, err);
     }
   }
-  return { ok, failed, rows: totalRows };
+  return report;
 }

@@ -164,6 +164,24 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
   });
 }
 
+/** Fetch all data rows of a sheet (header + body). Used for import. */
+export async function fetchAllRows(
+  spreadsheetId: string,
+  sheetTitle: string,
+  maxRows = 2000,
+): Promise<{ headers: string[]; rows: string[][] }> {
+  const range = `${encodeURIComponent(sheetTitle)}!A1:Z${maxRows + 1}`;
+  const r = await authFetch(`${API}/${spreadsheetId}/values/${range}`);
+  if (!r.ok) {
+    let body = '';
+    try { body = await r.text(); } catch { /* ignore */ }
+    throw new Error(`시트 조회 실패 (HTTP ${r.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+  }
+  const d = (await r.json()) as { values?: string[][] };
+  const all = d.values || [];
+  return { headers: all[0] || [], rows: all.slice(1) };
+}
+
 /** Append a single row to the sheet. */
 export async function appendRow(
   spreadsheetId: string,

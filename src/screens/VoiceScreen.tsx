@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { T } from '../tokens';
 import { I } from '../components/icons';
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -14,8 +14,9 @@ export function VoiceScreen() {
   const s = useSettingsStore();
   const sess = useSessionStore();
   const voiceSession = useVoiceSession();
+  const [labelModal, setLabelModal] = useState(false);
 
-  useWakeLock(sess.phase === 'active' || sess.phase === 'complete');
+  useWakeLock(sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused');
 
   const totalRows = s.tableGenerated ? computeTotalRows(s.columns) : 0;
   const voiceCols = s.columns.filter((c) => c.input === 'voice');
@@ -23,10 +24,23 @@ export function VoiceScreen() {
 
   if (sess.phase === 'ready') {
     return (
-      <ReadyState
-        totalRows={totalRows}
-        onStart={() => voiceSession.start().then(() => lockPortrait())}
-      />
+      <>
+        <ReadyState
+          totalRows={totalRows}
+          onStart={() => setLabelModal(true)}
+        />
+        {labelModal && (
+          <SessionLabelDialog
+            defaultLabel={buildAutoLabel(s.columns)}
+            onCancel={() => setLabelModal(false)}
+            onConfirm={async (label) => {
+              setLabelModal(false);
+              await voiceSession.start(label);
+              await lockPortrait();
+            }}
+          />
+        )}
+      </>
     );
   }
 
@@ -46,10 +60,121 @@ export function VoiceScreen() {
         voiceCols={voiceCols}
         currentColId={currentCol?.id}
         completing={sess.phase === 'complete'}
+        paused={sess.phase === 'paused'}
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}
+        onTogglePause={() => {
+          if (sess.phase === 'paused') voiceSession.resume();
+          else voiceSession.pause();
+        }}
       />
+    </div>
+  );
+}
+
+/** Compose a default session label like "이원창 5월 15일". */
+function buildAutoLabel(columns: Column[]): string {
+  const today = new Date();
+  const dateStr = `${today.getMonth() + 1}월 ${today.getDate()}일`;
+  // first fixed-value auto column with a name like 농가, 라벨, 처리...
+  for (const c of columns) {
+    if (c.input !== 'auto') continue;
+    if (c.auto.kind === 'fixed' && c.auto.value && c.auto.value !== '오늘') {
+      return `${c.auto.value} ${dateStr}`;
+    }
+    if (c.auto.kind === 'options' && c.auto.selected.length === 1) {
+      return `${c.auto.selected[0]} ${dateStr}`;
+    }
+  }
+  return dateStr;
+}
+
+// ─── label dialog ─────────────────────────────────────────────
+function SessionLabelDialog({
+  defaultLabel, onCancel, onConfirm,
+}: {
+  defaultLabel: string;
+  onCancel: () => void;
+  onConfirm: (label: string) => void;
+}) {
+  const [value, setValue] = useState(defaultLabel);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100,
+        background: 'rgba(0,0,0,0.55)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
+        animation: 'fade-up 200ms ease-out',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: T.card, borderRadius: 18,
+          border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 360,
+          padding: 20,
+          display: 'flex', flexDirection: 'column', gap: 14,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div style={{ fontSize: 18, fontWeight: 700, color: T.text }}>오늘 세션 시작</div>
+        <div style={{ fontSize: 13, color: T.textMute, lineHeight: 1.5 }}>
+          데이터 탭에서 세션을 구분할 라벨입니다.
+        </div>
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onConfirm(value);
+            else if (e.key === 'Escape') onCancel();
+          }}
+          placeholder="예: 이원창 5월 15일"
+          style={{
+            height: 52, borderRadius: 12,
+            background: T.inputBg, border: `1px solid ${T.line}`,
+            color: T.text, fontSize: 17, fontWeight: 700,
+            outline: 'none', padding: '0 14px',
+            letterSpacing: -0.2,
+          }}
+        />
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={() => onConfirm('')}
+            style={{
+              flex: 1, height: 48, borderRadius: 14,
+              border: `1px solid ${T.lineStrong}`, background: 'transparent',
+              color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            건너뛰기
+          </button>
+          <button
+            onClick={() => onConfirm(value)}
+            style={{
+              flex: 1, height: 48, borderRadius: 14, border: 'none',
+              background: T.blue, color: '#fff',
+              fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
+              cursor: 'pointer',
+              boxShadow: `0 4px 14px ${T.blueGlow}`,
+            }}
+          >
+            시작
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -58,21 +183,22 @@ export function VoiceScreen() {
 function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => void }) {
   const s = useSettingsStore();
   const ready = s.tableGenerated && totalRows > 0 && isSpeechSupported();
+  const autoCount = s.columns.filter((c) => c.input === 'auto').length;
   const voiceCount = s.columns.filter((c) => c.input === 'voice').length;
   const ttsHint = !isSpeechSupported()
     ? '이 브라우저는 음성 인식을 지원하지 않습니다 (Chrome 권장)'
     : !s.tableGenerated
     ? '먼저 설정 탭에서 테이블을 생성하세요'
-    : '이어폰을 끼고 시작하세요';
+    : '';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ScreenHeader title="음성 입력" sub={ttsHint} />
+      <ScreenHeader title="음성 입력" sub={ttsHint || undefined} />
       <div
         style={{
           flex: 1, display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          padding: '0 24px', gap: 24,
+          padding: '0 24px', gap: 28,
         }}
       >
         <div style={{ position: 'relative' }}>
@@ -100,26 +226,14 @@ function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => 
         <div
           style={{
             background: T.card, border: `1px solid ${T.line}`, borderRadius: 14,
-            padding: '14px 18px',
-            display: 'flex', alignItems: 'center', gap: 18,
+            padding: '16px 20px',
+            display: 'flex', flexDirection: 'column', gap: 12,
             width: '100%', maxWidth: 320,
           }}
         >
-          <SummaryCol label="오늘 테이블" value={totalRows} unit="행" />
-          <Divider />
-          <SummaryCol label="항목" value={s.columns.length} unit="개" />
-          <Divider />
-          <SummaryCol label="음성" value={voiceCount} accent />
-        </div>
-
-        <div
-          style={{
-            fontSize: 14, color: T.textMute, textAlign: 'center',
-            lineHeight: 1.5, maxWidth: 300,
-          }}
-        >
-          시작 후 휴대전화를 보거나 만지지 마세요.<br />
-          모든 안내는 이어폰 음성으로 진행됩니다.
+          <SummaryRow label="오늘 테이블" value={totalRows} unit="행" />
+          <SummaryRow label="자동입력 항목" value={autoCount} unit="개" />
+          <SummaryRow label="음성입력 항목" value={voiceCount} unit="개" accent />
         </div>
       </div>
 
@@ -144,38 +258,40 @@ function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => 
   );
 }
 
-function SummaryCol({ label, value, unit, accent }: { label: string; value: number; unit?: string; accent?: boolean }) {
+function SummaryRow({ label, value, unit, accent }: { label: string; value: number; unit?: string; accent?: boolean }) {
   return (
-    <div style={{ flex: 1 }}>
-      <div style={{ fontSize: 10, color: T.textMute, fontWeight: 700, letterSpacing: 0.7 }}>{label}</div>
-      <div
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+      <span style={{ fontSize: 15, color: T.textDim, fontWeight: 600, letterSpacing: -0.1 }}>{label}</span>
+      <span
         style={{
-          fontSize: 22, fontWeight: 800,
+          fontSize: 24, fontWeight: 800,
           color: accent ? T.blue : T.text,
-          marginTop: 2, letterSpacing: -0.6,
+          letterSpacing: -0.6,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
         }}
       >
         {value}
-        {unit && <span style={{ fontSize: 12, color: T.textDim, fontWeight: 500, marginLeft: 4 }}>{unit}</span>}
-      </div>
+        {unit && <span style={{ fontSize: 13, color: T.textDim, fontWeight: 500, marginLeft: 4 }}>{unit}</span>}
+      </span>
     </div>
   );
 }
-function Divider() { return <div style={{ width: 1, height: 32, background: T.line }} />; }
 
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
-  totalRows, columns, voiceCols, currentColId, completing, onEnd, onRestartFromCol, onJumpToRow,
+  totalRows, columns, voiceCols, currentColId, completing, paused,
+  onEnd, onRestartFromCol, onJumpToRow, onTogglePause,
 }: {
   totalRows: number;
   columns: Column[];
   voiceCols: Column[];
   currentColId?: string;
   completing: boolean;
+  paused: boolean;
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
   onJumpToRow: (row: number) => void;
+  onTogglePause: () => void;
 }) {
   const sess = useSessionStore();
   const row = sess.activeRow;
@@ -204,19 +320,27 @@ function ActiveState({
             <span style={{ fontSize: 14, color: T.textDim, marginLeft: 6 }}>행</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div
-              style={{
-                width: 8, height: 8, borderRadius: '50%', background: T.red,
-                animation: 'pulse-mic 1.2s ease-in-out infinite',
-              }}
-            />
-            <span style={{ fontSize: 12, color: T.red, fontWeight: 700, letterSpacing: 0.7 }}>REC</span>
+            {paused ? (
+              <>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: T.amber }} />
+                <span style={{ fontSize: 12, color: T.amber, fontWeight: 700, letterSpacing: 0.7 }}>PAUSE</span>
+              </>
+            ) : (
+              <>
+                <div
+                  style={{
+                    width: 8, height: 8, borderRadius: '50%', background: T.red,
+                    animation: 'pulse-mic 1.2s ease-in-out infinite',
+                  }}
+                />
+                <span style={{ fontSize: 12, color: T.red, fontWeight: 700, letterSpacing: 0.7 }}>REC</span>
+              </>
+            )}
           </div>
         </div>
         <div
           style={{
-            marginTop: 6,
-            position: 'relative', height: 4, borderRadius: 2,
+            marginTop: 6, position: 'relative', height: 4, borderRadius: 2,
             background: 'rgba(255,255,255,0.08)',
           }}
         >
@@ -224,25 +348,25 @@ function ActiveState({
             style={{
               position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 2,
               width: `${pct}%`,
-              background: completing ? T.green : T.blue,
+              background: completing ? T.green : paused ? T.amber : T.blue,
               transition: 'width 400ms ease-out, background 200ms',
-              boxShadow: completing ? `0 0 12px ${T.green}` : `0 0 8px ${T.blueGlow}`,
+              boxShadow: completing ? `0 0 12px ${T.green}` : paused ? '0 0 8px rgba(255,179,0,0.4)' : `0 0 8px ${T.blueGlow}`,
             }}
           />
         </div>
       </div>
 
-      {/* Column strip — bigger chips, active green */}
+      {/* Chip grid */}
       <div
         style={{
           padding: '10px 12px',
-          display: 'flex', flexWrap: 'wrap', gap: 8,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+          gap: 8,
           borderTop: `1px solid ${T.line}`,
           borderBottom: `1px solid ${T.line}`,
-          alignContent: 'flex-start',
           flexShrink: 0,
-          maxHeight: 200, overflowY: 'auto',
-          WebkitOverflowScrolling: 'touch',
+          alignContent: 'flex-start',
         }}
       >
         {columns.map((c) => {
@@ -283,46 +407,76 @@ function ActiveState({
         })}
       </div>
 
-      {/* Center: mic pulse + recognized value */}
+      {/* Center: mic pause toggle + end button + recognized value */}
       <div
         style={{
           flex: 1, position: 'relative',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          padding: '0 24px', gap: 14, minHeight: 0,
+          padding: '0 24px', gap: 12, minHeight: 0,
         }}
       >
-        <div style={{ position: 'relative', width: 60, height: 60 }}>
-          {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              style={{
-                position: 'absolute', inset: 0, borderRadius: '50%',
-                border: `1.5px solid ${T.blue}`,
-                animation: `ring-expand 2.4s ease-out ${i * 0.8}s infinite`,
-              }}
-            />
-          ))}
-          <div
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 16,
+          }}
+        >
+          {/* Pause toggle (large mic) */}
+          <button
+            onClick={onTogglePause}
             style={{
-              width: 60, height: 60, borderRadius: '50%',
-              background: `radial-gradient(circle at 30% 30%, #5a9bff, ${T.blue} 60%, #1755c9)`,
+              position: 'relative', width: 76, height: 76, borderRadius: '50%',
+              border: 'none', cursor: 'pointer', padding: 0,
+              background: paused
+                ? `radial-gradient(circle at 30% 30%, #3A3E45, #2A2D32 60%, #1A1C1F)`
+                : `radial-gradient(circle at 30% 30%, #5a9bff, ${T.blue} 60%, #1755c9)`,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              animation: 'pulse-mic 1.4s ease-in-out infinite',
-              boxShadow: `0 0 32px ${T.blueGlow}, 0 6px 18px rgba(0,0,0,0.4)`,
+              animation: paused ? 'none' : 'pulse-mic 1.4s ease-in-out infinite',
+              boxShadow: paused ? '0 4px 14px rgba(0,0,0,0.3)' : `0 0 32px ${T.blueGlow}, 0 6px 18px rgba(0,0,0,0.4)`,
             }}
+            title={paused ? '재개' : '일시정지'}
           >
-            {I.micFilled(28, '#fff')}
-          </div>
+            {!paused && [0, 1, 2].map((i) => (
+              <div
+                key={i}
+                style={{
+                  position: 'absolute', inset: 0, borderRadius: '50%',
+                  border: `1.5px solid ${T.blue}`,
+                  animation: `ring-expand 2.4s ease-out ${i * 0.8}s infinite`,
+                }}
+              />
+            ))}
+            {paused
+              ? I.play(28, T.textDim)
+              : I.micFilled(28, '#fff')}
+          </button>
+
+          {/* End button */}
+          <button
+            onClick={onEnd}
+            style={{
+              width: 76, height: 76, borderRadius: '50%',
+              border: `2px solid ${T.lineStrong}`,
+              background: 'rgba(255,82,82,0.08)',
+              color: T.red,
+              cursor: 'pointer',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              gap: 2,
+            }}
+            title="입력 종료"
+          >
+            {I.stop(22, T.red)}
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4 }}>종료</span>
+          </button>
         </div>
 
         <div
           style={{
-            fontSize: 64, fontWeight: 800,
-            color: completing ? T.green : T.text,
+            fontSize: 56, fontWeight: 800,
+            color: completing ? T.green : paused ? T.textMute : T.text,
             letterSpacing: -2, lineHeight: 1,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            minHeight: 64,
+            minHeight: 56,
             textShadow: completing ? `0 0 32px rgba(0,200,83,0.4)` : 'none',
           }}
         >
@@ -333,7 +487,7 @@ function ActiveState({
       {/* TTS echo */}
       <div
         style={{
-          padding: '8px 16px 6px',
+          padding: '6px 16px 4px',
           borderTop: `1px solid ${T.line}`,
           display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0,
         }}
@@ -346,26 +500,26 @@ function ActiveState({
         >
           {sess.lastTts}
         </div>
-      </div>
-
-      {/* Bottom: end button */}
-      <div
-        style={{
-          padding: '8px 16px 12px',
-          display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0,
-        }}
-      >
-        <button
-          onClick={onEnd}
+        <div
           style={{
-            flex: 1, height: 48, borderRadius: 24,
-            border: `1.5px solid ${T.lineStrong}`, background: 'transparent',
-            color: T.textDim, fontSize: 15, fontWeight: 700, letterSpacing: -0.2,
-            cursor: 'pointer',
+            display: 'flex', flexWrap: 'wrap', gap: 6,
+            fontSize: 11, color: T.textMute,
           }}
         >
-          입력 종료
-        </button>
+          <span style={{ fontWeight: 700 }}>명령:</span>
+          {['수정', '스킵', '일시정지', '종료'].map((cmd) => (
+            <span
+              key={cmd}
+              style={{
+                padding: '2px 8px', borderRadius: 999,
+                background: 'rgba(255,255,255,0.05)',
+                color: T.textDim,
+              }}
+            >
+              {cmd}
+            </span>
+          ))}
+        </div>
       </div>
     </>
   );
@@ -420,26 +574,37 @@ function ColumnChip({
     <div
       onClick={() => { if (clickable && !isEditing) onActivate(); }}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 8,
-        padding: '10px 14px',
-        borderRadius: 14,
-        fontSize: 19,
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '8px 10px',
+        borderRadius: 12,
+        fontSize: 'clamp(13px, 4vw, 16px)',
         background: bg,
         border: `2px solid ${border}`,
         color: textColor,
         fontWeight: isActive ? 800 : 700,
         cursor: clickable ? 'pointer' : 'default',
-        whiteSpace: 'nowrap',
         letterSpacing: -0.1,
-        minHeight: 48,
+        minHeight: 44,
+        minWidth: 0,
+        overflow: 'hidden',
         transition: 'background 150ms, border 150ms',
       }}
     >
       {isActive && (
-        <span style={{ color: T.green, fontSize: 16, fontWeight: 900 }}>▶</span>
+        <span style={{ color: T.green, fontSize: 14, fontWeight: 900, flexShrink: 0 }}>▶</span>
       )}
-      {isDone && !isActive && I.check(14, T.green)}
-      <span style={{ color: isActive ? T.green : T.textMute, fontSize: 16, fontWeight: 700 }}>
+      {isDone && !isActive && I.check(12, T.green)}
+      <span
+        style={{
+          color: isActive ? T.green : T.textMute,
+          fontSize: 'clamp(11px, 3.4vw, 13px)',
+          fontWeight: 700,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          minWidth: 0,
+        }}
+      >
         {col.name}
       </span>
       {isEditing ? (
@@ -455,20 +620,26 @@ function ColumnChip({
           }}
           onClick={(e) => e.stopPropagation()}
           style={{
-            width: 80,
+            flex: 1, minWidth: 0,
             background: 'transparent', border: 'none', outline: 'none',
             color: T.text,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            fontSize: 20, fontWeight: 800,
+            fontSize: 'clamp(13px, 4vw, 17px)', fontWeight: 800,
             textAlign: 'right',
           }}
         />
       ) : (
         <span
           style={{
+            flex: 1,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             color: isActive ? T.text : isDone ? T.text : T.textDim,
-            fontSize: 20, fontWeight: 800,
+            fontSize: 'clamp(13px, 4vw, 17px)', fontWeight: 800,
+            textAlign: 'right',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            minWidth: 0,
           }}
         >
           {value || '—'}

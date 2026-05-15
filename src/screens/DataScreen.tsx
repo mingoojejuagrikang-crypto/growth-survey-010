@@ -3,10 +3,13 @@ import { T } from '../tokens';
 import { I } from '../components/icons';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useDataStore } from '../stores/dataStore';
-import { syncSelected } from '../lib/sync';
+import { useSettingsStore } from '../stores/settingsStore';
+import { syncSelected, type SyncReport, type SyncFailure } from '../lib/sync';
 import { downloadCsv, sessionsToCsv } from '../lib/csv';
 import { deleteSession as dbDeleteSession, saveSession } from '../lib/db';
-import type { Column, Session } from '../types';
+import { fetchAllRows, parseSpreadsheetId } from '../lib/sheets';
+import { getAccessToken } from '../lib/googleAuth';
+import type { Column, Session, SessionRow } from '../types';
 
 export function DataScreen() {
   const sessions = useDataStore((s) => s.sessions);
@@ -14,12 +17,22 @@ export function DataScreen() {
   const toggleExpand = useDataStore((s) => s.toggleExpand);
   const updateRowValue = useDataStore((s) => s.updateRowValue);
   const removeSession = useDataStore((s) => s.removeSession);
+  const upsertSession = useDataStore((s) => s.upsertSession);
+
   const unsynced = sessions.filter((s) => s.syncedRows < s.completedRows).length;
   const empty = sessions.length === 0;
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [syncModalOpen, setSyncModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
+  const [failureReport, setFailureReport] = useState<SyncReport | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [importPreview, setImportPreview] = useState<{ rows: number; headers: string[] } | null>(null);
+  const importDataRef = useRef<{ headers: string[]; rows: string[][] } | null>(null);
+
+  const lastSelectedIdsRef = useRef<string[]>([]);
 
   const doCsv = () => {
     if (sessions.length === 0) {
@@ -40,23 +53,39 @@ export function DataScreen() {
     }
   };
 
-  const handleSyncConfirm = async (ids: string[]) => {
-    setSyncModalOpen(false);
+  const runSync = async (ids: string[]) => {
     if (ids.length === 0) return;
+    lastSelectedIdsRef.current = ids;
     setBusy('시트에 추가 중...');
     setMsg(null);
     try {
       const report = await syncSelected(ids);
-      if (report.message) setMsg(report.message);
-      else if (report.failed > 0)
+      if (report.message) {
+        setMsg(report.message);
+      } else if (report.failed > 0) {
         setMsg(`${report.ok}개 세션 성공, ${report.failed}개 실패 (${report.rows}행 추가됨)`);
-      else if (report.ok > 0) setMsg(`✓ ${report.rows}행을 시트에 추가했습니다`);
-      else setMsg('추가할 새 데이터가 없습니다.');
+        setFailureReport(report);
+      } else if (report.ok > 0) {
+        setMsg(`✓ ${report.rows}행을 시트에 추가했습니다`);
+      } else {
+        setMsg('추가할 새 데이터가 없습니다.');
+      }
     } catch (err) {
       setMsg('실패: ' + (err as Error).message);
     } finally {
       setBusy(null);
     }
+  };
+
+  const handleSyncConfirm = async (ids: string[]) => {
+    setSyncModalOpen(false);
+    await runSync(ids);
+  };
+
+  const handleRetry = async () => {
+    setFailureReport(null);
+    const ids = failureReport?.failures.map((f) => f.sessionId) ?? lastSelectedIdsRef.current;
+    if (ids.length) await runSync(ids);
   };
 
   const handleDeleteConfirm = async () => {
@@ -68,33 +97,93 @@ export function DataScreen() {
     setMsg('세션 삭제됨');
   };
 
+  const handleBulkDelete = async () => {
+    const ids = [...selectedForDelete];
+    setBulkDeleteOpen(false);
+    for (const id of ids) {
+      try { await dbDeleteSession(id); } catch { /* ignore */ }
+      removeSession(id);
+    }
+    setSelectedForDelete(new Set());
+    setSelectMode(false);
+    setMsg(`✓ ${ids.length}개 세션 삭제됨`);
+  };
+
+  // 시트에서 가져오기
+  const handleImportClick = async () => {
+    setMsg(null);
+    setBusy(null);
+    const settings = useSettingsStore.getState();
+    if (!getAccessToken()) {
+      setMsg('Google 로그인이 필요합니다.');
+      return;
+    }
+    const id = parseSpreadsheetId(settings.sheetUrl);
+    if (!id || !settings.sheetTab) {
+      setMsg('설정 탭에서 시트 URL과 탭을 먼저 설정하세요.');
+      return;
+    }
+    try {
+      setBusy('시트 데이터 조회 중...');
+      const { headers, rows } = await fetchAllRows(id, settings.sheetTab);
+      importDataRef.current = { headers, rows };
+      setImportPreview({ rows: rows.length, headers });
+    } catch (err) {
+      setMsg('가져오기 실패: ' + (err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleImportConfirm = async () => {
+    const data = importDataRef.current;
+    setImportPreview(null);
+    if (!data) return;
+    const settings = useSettingsStore.getState();
+    const session = importSheetToSession(data.headers, data.rows, settings.columns);
+    upsertSession(session);
+    try { await saveSession(session); } catch { /* ignore */ }
+    setMsg(`✓ ${data.rows.length}행 가져옴`);
+    importDataRef.current = null;
+  };
+
+  const toggleDeleteSelect = (id: string) => {
+    setSelectedForDelete((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <ScreenHeader title="데이터" sub={`${sessions.length}개 세션`} />
 
-      <div style={{ padding: '0 16px 12px', display: 'flex', gap: 10, flexShrink: 0 }}>
+      {/* Action bar */}
+      <div style={{ padding: '0 16px 10px', display: 'flex', gap: 8, flexShrink: 0 }}>
         <button
           onClick={() => setSyncModalOpen(true)}
           disabled={busy !== null || sessions.length === 0}
           style={{
-            flex: 1, height: 56, borderRadius: 14, border: 'none',
+            flex: 1, height: 52, borderRadius: 14, border: 'none',
             background: sessions.length === 0 ? '#2A2D32' : T.blue,
-            color: '#fff', fontSize: 16, fontWeight: 800, letterSpacing: -0.2,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+            color: '#fff', fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
             cursor: sessions.length === 0 ? 'not-allowed' : 'pointer',
             position: 'relative',
             boxShadow: sessions.length === 0 ? 'none' : `0 4px 14px ${T.blueGlow}`,
             opacity: sessions.length === 0 ? 0.6 : 1,
           }}
         >
-          {I.sync(20, '#fff')} 시트에 데이터 추가
+          {I.sync(18, '#fff')} 시트에 추가
           {unsynced > 0 && (
             <span
               style={{
                 position: 'absolute', top: -6, right: -6,
-                minWidth: 26, height: 26, padding: '0 8px',
+                minWidth: 24, height: 24, padding: '0 7px',
                 borderRadius: 999, background: T.amber, color: '#1a1300',
-                fontSize: 14, fontWeight: 800,
+                fontSize: 12, fontWeight: 800,
                 fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 border: '2px solid #0E0F11',
@@ -105,17 +194,68 @@ export function DataScreen() {
           )}
         </button>
         <button
+          onClick={handleImportClick}
+          disabled={busy !== null}
+          style={{
+            height: 52, padding: '0 14px', borderRadius: 14,
+            border: `1px solid ${T.lineStrong}`, background: T.card,
+            color: T.text, fontSize: 13, fontWeight: 700,
+            display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+          }}
+          title="시트에서 가져오기"
+        >
+          {I.download(18, T.text)} 가져오기
+        </button>
+        <button
           onClick={doCsv}
           style={{
-            height: 56, padding: '0 18px', borderRadius: 14,
+            height: 52, padding: '0 14px', borderRadius: 14,
             border: `1px solid ${T.lineStrong}`, background: T.card,
-            color: T.text, fontSize: 16, fontWeight: 700,
-            display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+            color: T.text, fontSize: 13, fontWeight: 700,
+            display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
           }}
         >
-          {I.download(20, T.text)} CSV
+          CSV
         </button>
       </div>
+
+      {/* Select mode toggle */}
+      {sessions.length > 0 && (
+        <div style={{ padding: '0 16px 8px', display: 'flex', gap: 8, flexShrink: 0 }}>
+          <button
+            onClick={() => {
+              setSelectMode(!selectMode);
+              setSelectedForDelete(new Set());
+            }}
+            style={{
+              height: 36, padding: '0 12px', borderRadius: 10,
+              border: `1px solid ${selectMode ? T.blue : T.line}`,
+              background: selectMode ? T.blueGlow : 'transparent',
+              color: selectMode ? T.text : T.textDim,
+              fontSize: 13, fontWeight: 700, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            {I.checkSquare(14, selectMode ? T.blue : T.textDim)}
+            {selectMode ? `선택됨 ${selectedForDelete.size}` : '선택'}
+          </button>
+          {selectMode && selectedForDelete.size > 0 && (
+            <button
+              onClick={() => setBulkDeleteOpen(true)}
+              style={{
+                marginLeft: 'auto',
+                height: 36, padding: '0 14px', borderRadius: 10,
+                border: 'none', background: T.red, color: '#fff',
+                fontSize: 13, fontWeight: 800, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: 6,
+                boxShadow: '0 2px 8px rgba(255,82,82,0.3)',
+              }}
+            >
+              {I.trash(14, '#fff')} {selectedForDelete.size}개 삭제
+            </button>
+          )}
+        </div>
+      )}
 
       {(busy || msg) && (
         <div
@@ -125,9 +265,22 @@ export function DataScreen() {
             background: 'rgba(255,255,255,0.04)',
             fontSize: 14, color: msg?.startsWith('✓') ? T.green : T.textDim,
             flexShrink: 0,
+            display: 'flex', alignItems: 'center', gap: 10,
           }}
         >
-          {busy || msg}
+          <span style={{ flex: 1 }}>{busy || msg}</span>
+          {failureReport && failureReport.failures.length > 0 && (
+            <button
+              onClick={() => setFailureReport(failureReport)}
+              style={{
+                background: 'transparent', border: `1px solid ${T.line}`,
+                color: T.text, fontSize: 12, padding: '4px 10px', borderRadius: 6,
+                cursor: 'pointer',
+              }}
+            >
+              자세히
+            </button>
+          )}
         </div>
       )}
 
@@ -147,6 +300,9 @@ export function DataScreen() {
               key={s.id}
               session={s}
               expanded={expandedSessionId === s.id}
+              selectMode={selectMode}
+              isSelected={selectedForDelete.has(s.id)}
+              onToggleSelect={() => toggleDeleteSelect(s.id)}
               onToggle={() => toggleExpand(s.id)}
               onDelete={() => setDeleteTarget(s)}
               onCellSave={(rowIndex, colId, value) => handleCellSave(s.id, rowIndex, colId, value)}
@@ -173,11 +329,70 @@ export function DataScreen() {
           onConfirm={handleDeleteConfirm}
         />
       )}
+
+      {bulkDeleteOpen && (
+        <ConfirmModal
+          title="세션 일괄 삭제"
+          body={`선택한 ${selectedForDelete.size}개 세션을 삭제할까요?\n복구할 수 없습니다.`}
+          confirmLabel={`${selectedForDelete.size}개 삭제`}
+          danger
+          onCancel={() => setBulkDeleteOpen(false)}
+          onConfirm={handleBulkDelete}
+        />
+      )}
+
+      {failureReport && (
+        <FailureModal
+          report={failureReport}
+          onClose={() => setFailureReport(null)}
+          onRetry={handleRetry}
+        />
+      )}
+
+      {importPreview && (
+        <ConfirmModal
+          title="시트에서 가져오기"
+          body={`${importPreview.rows}행을 새 세션으로 가져옵니다.\n헤더: ${importPreview.headers.slice(0, 6).join(', ')}${importPreview.headers.length > 6 ? ' ...' : ''}\n\n계속할까요?`}
+          confirmLabel="가져오기"
+          onCancel={() => { setImportPreview(null); importDataRef.current = null; }}
+          onConfirm={handleImportConfirm}
+        />
+      )}
     </div>
   );
 }
 
-// ─── sync modal ───────────────────────────────────────────────
+// ─── import helper ───────────────────────────────────────────
+function importSheetToSession(headers: string[], rows: string[][], columns: Column[]): Session {
+  const colIndexById: Record<string, number> = {};
+  for (const c of columns) {
+    const idx = headers.findIndex((h) => h.trim() === c.name.trim());
+    if (idx >= 0) colIndexById[c.id] = idx;
+  }
+  const sessionRows: SessionRow[] = rows
+    .filter((row) => row.some((cell) => (cell ?? '').toString().trim() !== ''))
+    .map((row, i) => {
+      const values: Record<string, string> = {};
+      for (const c of columns) {
+        const idx = colIndexById[c.id];
+        values[c.id] = idx !== undefined ? (row[idx] || '').toString().trim() : '';
+      }
+      return { index: i + 1, values, complete: true };
+    });
+  return {
+    id: `imported_${Date.now()}`,
+    date: new Date().toISOString().slice(0, 10),
+    label: `시트에서 가져옴 (${sessionRows.length}행)`,
+    columns,
+    rows: sessionRows,
+    completedRows: sessionRows.length,
+    syncedRows: sessionRows.length,
+    startedAt: Date.now(),
+    finishedAt: Date.now(),
+  };
+}
+
+// ─── sync session modal ───────────────────────────────────────
 function SyncSessionModal({
   sessions, onCancel, onConfirm,
 }: {
@@ -185,13 +400,11 @@ function SyncSessionModal({
   onCancel: () => void;
   onConfirm: (ids: string[]) => void;
 }) {
-  // default: unsynced only
   const defaultIds = useMemo(
     () => sessions.filter((s) => s.syncedRows < s.completedRows).map((s) => s.id),
     [sessions],
   );
   const [selected, setSelected] = useState<Set<string>>(new Set(defaultIds));
-
   const toggle = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -204,12 +417,8 @@ function SyncSessionModal({
     <Backdrop onClose={onCancel}>
       <div
         style={{
-          background: T.card,
-          borderRadius: 18,
-          border: `1px solid ${T.line}`,
-          width: '100%',
-          maxWidth: 360,
-          maxHeight: '78vh',
+          background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 360, maxHeight: '78vh',
           display: 'flex', flexDirection: 'column',
           boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
         }}
@@ -235,7 +444,6 @@ function SyncSessionModal({
             {I.close(18, T.textDim)}
           </button>
         </div>
-
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px' }}>
           {sessions.length === 0 ? (
             <div style={{ padding: 20, textAlign: 'center', color: T.textMute }}>세션 없음</div>
@@ -266,10 +474,15 @@ function SyncSessionModal({
                       }}
                     >
                       {s.date}
+                      {s.label && (
+                        <span style={{ marginLeft: 8, fontSize: 12, color: T.textMute, fontFamily: 'inherit' }}>
+                          {s.label}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: 12, color: T.textMute, marginTop: 2 }}>
                       {s.completedRows}행
-                      {fullySynced ? ' · ✓ 동기화됨' : pending > 0 ? ` · ${pending}행 신규` : ''}
+                      {fullySynced ? ' · ✓ 업로드완료' : pending > 0 ? ` · ${pending}행 신규` : ''}
                     </div>
                   </div>
                 </button>
@@ -277,7 +490,6 @@ function SyncSessionModal({
             })
           )}
         </div>
-
         <div
           style={{
             padding: '12px 16px',
@@ -299,8 +511,7 @@ function SyncSessionModal({
             onClick={() => onConfirm([...selected])}
             disabled={selected.size === 0}
             style={{
-              flex: 1, height: 48, borderRadius: 14,
-              border: 'none',
+              flex: 1, height: 48, borderRadius: 14, border: 'none',
               background: selected.size === 0 ? '#2A2D32' : T.blue,
               color: selected.size === 0 ? T.textMute : '#fff',
               fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
@@ -313,6 +524,124 @@ function SyncSessionModal({
         </div>
       </div>
     </Backdrop>
+  );
+}
+
+// ─── failure modal ───────────────────────────────────────────
+function FailureModal({
+  report, onClose, onRetry,
+}: {
+  report: SyncReport;
+  onClose: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <Backdrop onClose={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 380, maxHeight: '78vh',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div
+          style={{
+            padding: '14px 16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            borderBottom: `1px solid ${T.line}`,
+          }}
+        >
+          <div style={{ fontSize: 17, fontWeight: 700, color: T.red }}>업로드 실패</div>
+          <button
+            onClick={onClose}
+            style={{
+              width: 36, height: 36, borderRadius: 18,
+              border: 'none', background: 'rgba(255,255,255,0.06)',
+              color: T.textDim, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            {I.close(18, T.textDim)}
+          </button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+          <div style={{ fontSize: 14, color: T.textDim, marginBottom: 12 }}>
+            성공 {report.ok}개, 실패 {report.failed}개 ({report.rows}행 추가됨)
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {report.failures.map((f) => (
+              <FailureItem key={f.sessionId} f={f} />
+            ))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: '12px 16px',
+            display: 'flex', gap: 10,
+            borderTop: `1px solid ${T.line}`,
+          }}
+        >
+          <button
+            onClick={onClose}
+            style={{
+              flex: 1, height: 48, borderRadius: 14,
+              border: `1px solid ${T.lineStrong}`, background: 'transparent',
+              color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            닫기
+          </button>
+          <button
+            onClick={onRetry}
+            style={{
+              flex: 1, height: 48, borderRadius: 14, border: 'none',
+              background: T.blue, color: '#fff',
+              fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
+              cursor: 'pointer',
+              boxShadow: `0 4px 14px ${T.blueGlow}`,
+            }}
+          >
+            재시도
+          </button>
+        </div>
+      </div>
+    </Backdrop>
+  );
+}
+
+function FailureItem({ f }: { f: SyncFailure }) {
+  const isNetworkError = /network|fetch|offline/i.test(f.reason);
+  const isAuthError = /401|403|토큰|로그인/i.test(f.reason);
+  const isRateLimit = /429|503|busy|rate/i.test(f.reason);
+  const hint = isRateLimit
+    ? '잠시 후 다시 시도하세요. 구글 시트 일시적 과부하일 수 있습니다.'
+    : isAuthError
+    ? '설정 탭에서 다시 로그인 후 시도하세요.'
+    : isNetworkError
+    ? '네트워크 상태를 확인하세요.'
+    : '';
+  return (
+    <div
+      style={{
+        padding: 12, borderRadius: 10,
+        background: 'rgba(255,82,82,0.08)',
+        border: `1px solid rgba(255,82,82,0.20)`,
+      }}
+    >
+      <div style={{ fontSize: 14, color: T.text, fontWeight: 700, marginBottom: 4 }}>
+        {f.sessionDate}{f.sessionLabel ? ` · ${f.sessionLabel}` : ''}
+      </div>
+      <div style={{ fontSize: 13, color: T.textDim, lineHeight: 1.5 }}>{f.reason}</div>
+      {hint && (
+        <div style={{ fontSize: 12, color: T.amber, marginTop: 6, fontStyle: 'italic' }}>
+          💡 {hint}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -333,7 +662,7 @@ function Checkbox({ checked }: { checked: boolean }) {
   );
 }
 
-// ─── confirm modal (delete) ───────────────────────────────────
+// ─── confirm modal ────────────────────────────────────────────
 function ConfirmModal({
   title, body, confirmLabel = '확인', danger, onCancel, onConfirm,
 }: {
@@ -347,16 +676,14 @@ function ConfirmModal({
   return (
     <Backdrop onClose={onCancel}>
       <div
+        onClick={(e) => e.stopPropagation()}
         style={{
-          background: T.card,
-          borderRadius: 18,
-          border: `1px solid ${T.line}`,
-          width: '100%', maxWidth: 320,
+          background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 360,
           padding: 20,
           display: 'flex', flexDirection: 'column', gap: 14,
           boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         <div style={{ fontSize: 18, fontWeight: 700, color: T.text }}>{title}</div>
         <div
@@ -414,12 +741,16 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
   );
 }
 
-// ─── session card ─────────────────────────────────────────────
+// ─── session card ────────────────────────────────────────────
 function SessionCard({
-  session, expanded, onToggle, onDelete, onCellSave,
+  session, expanded, selectMode, isSelected,
+  onToggleSelect, onToggle, onDelete, onCellSave,
 }: {
   session: Session;
   expanded: boolean;
+  selectMode: boolean;
+  isSelected: boolean;
+  onToggleSelect: () => void;
   onToggle: () => void;
   onDelete: () => void;
   onCellSave: (rowIndex: number, colId: string, value: string) => void;
@@ -432,26 +763,39 @@ function SessionCard({
     ? I.cloud(16, T.amber)
     : I.cloudOff(16, T.textMute);
   const syncLabel = fullySynced
-    ? '동기화됨'
+    ? '업로드완료'
     : partial
     ? `${session.syncedRows}/${session.completedRows}`
-    : '미동기화';
+    : '미업로드';
   const syncColor = fullySynced ? T.green : partial ? T.amber : T.textMute;
 
   return (
     <div
       style={{
-        background: T.card,
-        borderRadius: 12,
-        border: `1px solid ${expanded ? 'rgba(41,121,255,0.4)' : T.line}`,
+        background: T.card, borderRadius: 12,
+        border: `1px solid ${
+          isSelected ? T.blue : expanded ? 'rgba(41,121,255,0.4)' : T.line
+        }`,
         overflow: 'hidden',
         transition: 'border 200ms',
         flexShrink: 0,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'stretch' }}>
+        {selectMode && (
+          <button
+            onClick={onToggleSelect}
+            style={{
+              padding: '0 14px', background: 'transparent', border: 'none',
+              borderRight: `1px solid ${T.line}`,
+              display: 'flex', alignItems: 'center', cursor: 'pointer',
+            }}
+          >
+            <Checkbox checked={isSelected} />
+          </button>
+        )}
         <button
-          onClick={onToggle}
+          onClick={selectMode ? onToggleSelect : onToggle}
           style={{
             flex: 1, border: 'none', background: 'transparent',
             padding: '16px 16px',
@@ -475,7 +819,6 @@ function SessionCard({
             )}
           </div>
           <div style={{ flex: 1 }} />
-
           <div
             style={{
               display: 'flex', alignItems: 'baseline', gap: 4,
@@ -493,7 +836,6 @@ function SessionCard({
             </span>
             <span style={{ fontSize: 13, color: T.textMute, fontWeight: 600 }}>행</span>
           </div>
-
           <div
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -503,7 +845,6 @@ function SessionCard({
             {syncIcon}
             <span style={{ fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>{syncLabel}</span>
           </div>
-
           <div
             style={{
               color: T.textDim,
@@ -514,26 +855,27 @@ function SessionCard({
             {I.chevron(18, T.textDim)}
           </div>
         </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          style={{
-            padding: '0 14px',
-            background: 'transparent', border: 'none', borderLeft: `1px solid ${T.line}`,
-            color: T.red, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}
-          title="세션 삭제"
-        >
-          {I.trash(18, T.red)}
-        </button>
+        {!selectMode && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            style={{
+              padding: '0 14px',
+              background: 'transparent', border: 'none', borderLeft: `1px solid ${T.line}`,
+              color: T.red, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+            title="세션 삭제"
+          >
+            {I.trash(18, T.red)}
+          </button>
+        )}
       </div>
-
-      {expanded && <FullRowTable session={session} onCellSave={onCellSave} />}
+      {expanded && !selectMode && <FullRowTable session={session} onCellSave={onCellSave} />}
     </div>
   );
 }
 
-// ─── full editable table ──────────────────────────────────────
+// ─── full editable table ─────────────────────────────────────
 function FullRowTable({
   session, onCellSave,
 }: {
@@ -747,7 +1089,7 @@ function EmptyState() {
         아직 기록된 데이터가 없습니다
       </div>
       <div style={{ fontSize: 14, color: T.textMute, textAlign: 'center', lineHeight: 1.5 }}>
-        입력 탭에서 음성 세션을 시작하면<br />이곳에 표시됩니다
+        입력 탭에서 음성 세션을 시작하거나<br />시트에서 가져올 수 있습니다
       </div>
     </div>
   );

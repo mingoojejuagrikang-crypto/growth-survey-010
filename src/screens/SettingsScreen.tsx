@@ -478,6 +478,7 @@ export function SettingsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dropIdx, setDropIdx] = useState<number | null>(null);
+  const [confirmedUrl, setConfirmedUrl] = useState<string>(s.sheetUrl);
   const googleConfigured = isGoogleConfigured();
 
   useEffect(() => {
@@ -509,24 +510,37 @@ export function SettingsScreen() {
     }
   };
 
-  const onUrlChange = async (url: string) => {
-    s.set({ sheetUrl: url, availableSheets: [], sheetTab: '' });
+  /** URL 입력은 상태만 갱신, 적용은 confirm 버튼에서 */
+  const onUrlTyping = (url: string) => {
+    s.set({ sheetUrl: url });
+    setError(null);
+  };
+
+  /** "확인" 버튼: 현재 URL로 시트 정보 조회 시도 */
+  const onUrlConfirm = async () => {
+    setError(null);
+    const url = s.sheetUrl.trim();
+    if (!url) {
+      setError('URL을 입력하세요.');
+      return;
+    }
     const id = parseSpreadsheetId(url);
     if (!id) {
-      if (url) setError('스프레드시트 URL 형식이 올바르지 않습니다.');
+      setError('스프레드시트 URL 형식이 올바르지 않습니다.');
       return;
     }
-    setError(null);
     if (!s.googleConnected) {
-      setError('먼저 Google 로그인 후 시트 정보를 가져올 수 있습니다.');
+      setError('먼저 Google 로그인 후 다시 확인하세요.');
       return;
     }
+    s.set({ availableSheets: [], sheetTab: '' });
     try {
       setLoading('시트 정보 조회 중...');
       const meta = await fetchSpreadsheetMeta(id);
       const tabs = meta.sheets.map((sh) => sh.title);
       s.set({ availableSheets: tabs, sheetTab: tabs[0] || '' });
       if (tabs[0]) await loadHeaders(id, tabs[0]);
+      setConfirmedUrl(url);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -635,26 +649,50 @@ export function SettingsScreen() {
               {s.googleConnected && I.check(20, T.green)}
             </button>
 
-            <div
-              style={{
-                height: 52, borderRadius: 12,
-                background: T.inputBg, border: `1px solid ${T.line}`,
-                display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px',
-              }}
-            >
-              <div style={{ color: T.textMute }}>{I.link(18)}</div>
-              <input
-                value={s.sheetUrl}
-                onChange={(e) => onUrlChange(e.target.value)}
-                placeholder="스프레드시트 URL 붙여넣기"
+            <div style={{ display: 'flex', gap: 8 }}>
+              <div
                 style={{
-                  flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                  fontSize: 15, color: T.text, minWidth: 0,
+                  flex: 1,
+                  height: 52, borderRadius: 12,
+                  background: T.inputBg, border: `1px solid ${T.line}`,
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px',
+                  minWidth: 0,
                 }}
-              />
-              {s.sheetUrl && (
-                <Chip color={T.green} bg="rgba(0,200,83,0.13)" strong>파싱됨</Chip>
-              )}
+              >
+                <div style={{ color: T.textMute }}>{I.link(18)}</div>
+                <input
+                  value={s.sheetUrl}
+                  onChange={(e) => onUrlTyping(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') onUrlConfirm(); }}
+                  placeholder="스프레드시트 URL 붙여넣기"
+                  style={{
+                    flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                    fontSize: 15, color: T.text, minWidth: 0,
+                  }}
+                />
+              </div>
+              {(() => {
+                const applied = s.sheetUrl.trim() === confirmedUrl.trim() && s.availableSheets.length > 0;
+                const canConfirm = !!s.sheetUrl.trim() && !applied && !loading;
+                return (
+                  <button
+                    onClick={onUrlConfirm}
+                    disabled={!canConfirm && !applied}
+                    style={{
+                      height: 52, padding: '0 16px', borderRadius: 12,
+                      border: 'none',
+                      background: applied ? 'rgba(0,200,83,0.18)' : canConfirm ? T.blue : '#2A2D32',
+                      color: applied ? T.green : canConfirm ? '#fff' : T.textMute,
+                      fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
+                      cursor: canConfirm ? 'pointer' : 'default',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {applied ? <>{I.check(16, T.green)} 적용됨</> : '확인'}
+                  </button>
+                );
+              })()}
             </div>
 
             {(s.availableSheets.length > 0 || s.sheetUrl) && (

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type VoicePhase = 'ready' | 'active' | 'complete' | 'done';
+export type VoicePhase = 'ready' | 'active' | 'paused' | 'complete' | 'done';
 
 interface SessionState {
   phase: VoicePhase;
