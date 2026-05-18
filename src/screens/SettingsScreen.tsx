@@ -21,6 +21,8 @@ import {
 } from '../lib/sheets';
 import { computeTotalRows, nestedAutoValue, buildCyclingValues } from '../lib/autoValue';
 import { speak } from '../lib/speech';
+import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
+import { getAccessToken } from '../lib/googleAuth';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
@@ -493,6 +495,7 @@ export function SettingsScreen() {
   const [tablePreviewOpen, setTablePreviewOpen] = useState(false);
   const googleConfigured = isGoogleConfigured();
   const previewRowCount = computeTotalRows(s.columns);
+  const pickerAvailable = s.googleConnected && !!getPickerApiKey();
 
   useEffect(() => {
     const t = getStoredToken();
@@ -533,32 +536,9 @@ export function SettingsScreen() {
   const onUrlConfirm = async () => {
     setError(null);
     const url = s.sheetUrl.trim();
-    if (!url) {
-      setError('URL을 입력하세요.');
-      return;
-    }
-    const id = parseSpreadsheetId(url);
-    if (!id) {
-      setError('스프레드시트 URL 형식이 올바르지 않습니다.');
-      return;
-    }
-    if (!s.googleConnected) {
-      setError('먼저 Google 로그인 후 다시 확인하세요.');
-      return;
-    }
-    s.set({ availableSheets: [], sheetTab: '' });
-    try {
-      setLoading('시트 정보 조회 중...');
-      const meta = await fetchSpreadsheetMeta(id);
-      const tabs = meta.sheets.map((sh) => sh.title);
-      s.set({ availableSheets: tabs, sheetTab: tabs[0] || '' });
-      if (tabs[0]) await loadHeaders(id, tabs[0]);
-      setConfirmedUrl(url);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(null);
-    }
+    if (!url) { setError('URL을 입력하세요.'); return; }
+    if (!s.googleConnected) { setError('먼저 Google 로그인 후 다시 확인하세요.'); return; }
+    await onUrlConfirmWithUrl(url);
   };
 
   const onSheetTabChange = async (newTab: string) => {
@@ -588,6 +568,47 @@ export function SettingsScreen() {
         }),
       );
       if (enriched.length) s.set({ columns: enriched, tableGenerated: false });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const onPickerClick = async () => {
+    setError(null);
+    const token = getAccessToken();
+    if (!token) {
+      setError('먼저 Google 로그인 후 Drive에서 선택하세요.');
+      return;
+    }
+    try {
+      setLoading('Drive 파일 선택 중...');
+      const result = await openDrivePicker(token);
+      if (result) {
+        s.set({ sheetUrl: result.url });
+        setConfirmedUrl('');
+        setError(null);
+        await onUrlConfirmWithUrl(result.url);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const onUrlConfirmWithUrl = async (url: string) => {
+    const id = parseSpreadsheetId(url);
+    if (!id) { setError('스프레드시트 URL 형식이 올바르지 않습니다.'); return; }
+    s.set({ availableSheets: [], sheetTab: '' });
+    try {
+      setLoading('시트 정보 조회 중...');
+      const meta = await fetchSpreadsheetMeta(id);
+      const tabs = meta.sheets.map((sh) => sh.title);
+      s.set({ availableSheets: tabs, sheetTab: tabs[0] || '' });
+      if (tabs[0]) await loadHeaders(id, tabs[0]);
+      setConfirmedUrl(url);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -707,6 +728,23 @@ export function SettingsScreen() {
                   </button>
                 );
               })()}
+              {pickerAvailable && (
+                <button
+                  onClick={onPickerClick}
+                  disabled={loading !== null}
+                  title="Drive에서 스프레드시트 선택"
+                  style={{
+                    height: 52, padding: '0 14px', borderRadius: 12,
+                    border: `1px solid ${T.lineStrong}`, background: T.card,
+                    color: T.textDim, fontSize: 13, fontWeight: 700,
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    cursor: loading ? 'wait' : 'pointer',
+                    whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  {I.link(14, T.textDim)} Drive
+                </button>
+              )}
             </div>
 
             {(s.availableSheets.length > 0 || s.sheetUrl) && (
