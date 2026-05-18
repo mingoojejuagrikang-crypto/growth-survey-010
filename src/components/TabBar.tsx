@@ -34,6 +34,7 @@ export function TabBar({ tab, setTab }: Props) {
         return (
           <button
             key={t.id}
+            data-testid={`tab-${t.id}`}
             onClick={() => setTab(t.id)}
             style={{
               flex: 1,
