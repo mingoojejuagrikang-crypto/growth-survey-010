@@ -28,6 +28,8 @@ export function useVoiceSession() {
   const recorderRef = useRef<AudioRecorder | null>(null);
   const clipStartRowRef = useRef<number>(0);
   const clipStartColIdRef = useRef<string>('');
+  // rowIndex → colId → IDB key; accumulated in-memory until persistSession writes to dataStore
+  const pendingClipsRef = useRef<Record<number, Record<string, string>>>({});
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
@@ -80,16 +82,20 @@ export function useVoiceSession() {
       const auto = buildCyclingValues(settings.columns, r);
       const fixedAndAuto = autoNonCyclingValues(settings.columns, r);
       const voiceVals = sess.getRowValues(r);
-      // Collect any stored audio clips for this row from existing session
+      // Merge stored clips (from previous persists) with newly recorded clips
       const existingSession = useDataStore.getState().sessions.find(
         (s) => s.id === sessionIdRef.current,
       );
       const existingRow = existingSession?.rows.find((row) => row.index === r);
+      const mergedClips = {
+        ...(existingRow?.audioClips ?? {}),
+        ...(pendingClipsRef.current[r] ?? {}),
+      };
       return {
         index: r,
         values: { ...fixedAndAuto, ...auto, ...voiceVals },
         complete: true,
-        audioClips: existingRow?.audioClips,
+        audioClips: Object.keys(mergedClips).length > 0 ? mergedClips : undefined,
       };
     });
     const session: Session = {
@@ -422,17 +428,11 @@ export function useVoiceSession() {
     if (clipBlob && clipBlob.size > 1000) {
       const clipKey = `${sessionIdRef.current}:${awaiting.row}:${awaiting.colId}`;
       try { await saveAudioClip(clipKey, clipBlob); } catch { /* ignore */ }
-      // Update session row with clip reference
-      const ds = useDataStore.getState();
-      const session = ds.sessions.find((s) => s.id === sessionIdRef.current);
-      if (session) {
-        const updatedRows = session.rows.map((r) =>
-          r.index === awaiting.row
-            ? { ...r, audioClips: { ...r.audioClips, [awaiting.colId]: clipKey } }
-            : r,
-        );
-        ds.upsertSession({ ...session, rows: updatedRows });
-      }
+      // Track in memory; persistSession() will merge into session rows
+      pendingClipsRef.current[awaiting.row] = {
+        ...pendingClipsRef.current[awaiting.row],
+        [awaiting.colId]: clipKey,
+      };
     }
 
     logger.log({
@@ -483,6 +483,7 @@ export function useVoiceSession() {
 
     warmupTts();
     epochRef.current = 0;
+    pendingClipsRef.current = {};
     logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'start' });
 
     // Init audio recorder (best-effort, don't block if permission denied)

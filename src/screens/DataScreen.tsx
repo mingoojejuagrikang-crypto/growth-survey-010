@@ -6,13 +6,12 @@ import { useDataStore } from '../stores/dataStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { syncSelected, type SyncReport, type SyncFailure } from '../lib/sync';
 import { downloadCsv, sessionsToCsv } from '../lib/csv';
-import { deleteSession as dbDeleteSession, saveSession } from '../lib/db';
+import { deleteSession as dbDeleteSession, saveSession, loadAudioClip } from '../lib/db';
 import { fetchAllRows, parseSpreadsheetId } from '../lib/sheets';
 import { getAccessToken } from '../lib/googleAuth';
 import type { Column, Session, SessionRow } from '../types';
 import { exportLogZip, downloadZip } from '../lib/exportLog';
 import { uploadLogToDrive } from '../lib/driveUpload';
-import { loadAudioClip } from '../lib/db';
 
 export function DataScreen() {
   const sessions = useDataStore((s) => s.sessions);
