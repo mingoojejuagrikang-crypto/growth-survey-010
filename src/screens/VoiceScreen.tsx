@@ -15,8 +15,18 @@ export function VoiceScreen() {
   const sess = useSessionStore();
   const voiceSession = useVoiceSession();
   const [labelModal, setLabelModal] = useState(false);
+  const [confidence, setConfidence] = useState<number | null>(null);
 
   useWakeLock(sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused');
+
+  // Sync confidence display from voice session ref
+  useEffect(() => {
+    if (sess.phase !== 'active') return;
+    const interval = setInterval(() => {
+      setConfidence(voiceSession.lastConfidenceRef.current);
+    }, 300);
+    return () => clearInterval(interval);
+  }, [sess.phase, voiceSession.lastConfidenceRef]);
 
   const totalRows = s.tableGenerated ? computeTotalRows(s.columns) : 0;
   const voiceCols = s.columns.filter((c) => c.input === 'voice');
@@ -61,6 +71,7 @@ export function VoiceScreen() {
         currentColId={currentCol?.id}
         completing={sess.phase === 'complete'}
         paused={sess.phase === 'paused'}
+        confidence={confidence}
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}
@@ -279,7 +290,7 @@ function SummaryRow({ label, value, unit, accent }: { label: string; value: numb
 
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
-  totalRows, columns, voiceCols, currentColId, completing, paused,
+  totalRows, columns, voiceCols, currentColId, completing, paused, confidence,
   onEnd, onRestartFromCol, onJumpToRow, onTogglePause,
 }: {
   totalRows: number;
@@ -288,6 +299,7 @@ function ActiveState({
   currentColId?: string;
   completing: boolean;
   paused: boolean;
+  confidence: number | null;
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
   onJumpToRow: (row: number) => void;
@@ -319,7 +331,19 @@ function ActiveState({
             </span>
             <span style={{ fontSize: 14, color: T.textDim, marginLeft: 6 }}>행</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {confidence !== null && confidence > 0 && confidence < 1 && !paused && (
+              <span
+                style={{
+                  fontSize: 11, fontWeight: 700,
+                  color: confidence < 0.65 ? T.amber : T.green,
+                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                  letterSpacing: -0.2,
+                }}
+              >
+                {Math.round(confidence * 100)}%
+              </span>
+            )}
             {paused ? (
               <>
                 <div style={{ width: 8, height: 8, borderRadius: '50%', background: T.amber }} />

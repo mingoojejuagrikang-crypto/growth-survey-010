@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { T } from '../tokens';
 import { I } from '../components/icons';
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -10,6 +10,9 @@ import { deleteSession as dbDeleteSession, saveSession } from '../lib/db';
 import { fetchAllRows, parseSpreadsheetId } from '../lib/sheets';
 import { getAccessToken } from '../lib/googleAuth';
 import type { Column, Session, SessionRow } from '../types';
+import { exportLogZip, downloadZip } from '../lib/exportLog';
+import { uploadLogToDrive } from '../lib/driveUpload';
+import { loadAudioClip } from '../lib/db';
 
 export function DataScreen() {
   const sessions = useDataStore((s) => s.sessions);
@@ -26,13 +29,41 @@ export function DataScreen() {
   const [syncModalOpen, setSyncModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [failureReport, setFailureReport] = useState<SyncReport | null>(null);
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
-  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [importPreview, setImportPreview] = useState<{ rows: number; headers: string[] } | null>(null);
   const importDataRef = useRef<{ headers: string[]; rows: string[][] } | null>(null);
 
   const lastSelectedIdsRef = useRef<string[]>([]);
+  const [logMenuOpen, setLogMenuOpen] = useState(false);
+
+  const doLogDownload = useCallback(async () => {
+    setLogMenuOpen(false);
+    setBusy('로그 압축 중...');
+    try {
+      const blob = await exportLogZip();
+      const filename = `growth-log_${new Date().toISOString().slice(0, 10)}.zip`;
+      downloadZip(blob, filename);
+      setMsg(`✓ ${filename} 다운로드됨`);
+    } catch (err) {
+      setMsg('로그 다운로드 실패: ' + (err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  const doLogUpload = useCallback(async () => {
+    setLogMenuOpen(false);
+    setBusy('Drive에 로그 업로드 중...');
+    try {
+      const blob = await exportLogZip();
+      const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
+      await uploadLogToDrive(blob, filename);
+      setMsg('✓ 로그를 Drive에 업로드했습니다');
+    } catch (err) {
+      setMsg('업로드 실패: ' + (err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }, []);
 
   const doCsv = () => {
     if (sessions.length === 0) {
@@ -53,8 +84,8 @@ export function DataScreen() {
     }
   };
 
-  const runSync = async (ids: string[]) => {
-    if (ids.length === 0) return;
+  const runSyncInner = async (ids: string[]): Promise<SyncReport | null> => {
+    if (ids.length === 0) return null;
     lastSelectedIdsRef.current = ids;
     setBusy('시트에 추가 중...');
     setMsg(null);
@@ -70,22 +101,34 @@ export function DataScreen() {
       } else {
         setMsg('추가할 새 데이터가 없습니다.');
       }
+      return report;
     } catch (err) {
       setMsg('실패: ' + (err as Error).message);
+      return null;
     } finally {
       setBusy(null);
     }
   };
 
-  const handleSyncConfirm = async (ids: string[]) => {
+  const runSync = (ids: string[]) => runSyncInner(ids);
+
+  const handleSyncConfirm = async (ids: string[], autoDelete: boolean) => {
     setSyncModalOpen(false);
-    await runSync(ids);
+    const report = await runSyncInner(ids);
+    if (autoDelete && report) {
+      const successIds = ids.filter((id) => !report.failures.find((f) => f.sessionId === id));
+      for (const id of successIds) {
+        try { await dbDeleteSession(id); } catch { /* ignore */ }
+        removeSession(id);
+      }
+      if (successIds.length > 0) setMsg((m) => (m ? m + ` · ${successIds.length}개 세션 삭제됨` : `✓ ${successIds.length}개 세션 삭제됨`));
+    }
   };
 
   const handleRetry = async () => {
     setFailureReport(null);
     const ids = failureReport?.failures.map((f) => f.sessionId) ?? lastSelectedIdsRef.current;
-    if (ids.length) await runSync(ids);
+    if (ids.length) await runSyncInner(ids);
   };
 
   const handleDeleteConfirm = async () => {
@@ -95,18 +138,6 @@ export function DataScreen() {
     try { await dbDeleteSession(id); } catch { /* ignore */ }
     removeSession(id);
     setMsg('세션 삭제됨');
-  };
-
-  const handleBulkDelete = async () => {
-    const ids = [...selectedForDelete];
-    setBulkDeleteOpen(false);
-    for (const id of ids) {
-      try { await dbDeleteSession(id); } catch { /* ignore */ }
-      removeSession(id);
-    }
-    setSelectedForDelete(new Set());
-    setSelectMode(false);
-    setMsg(`✓ ${ids.length}개 세션 삭제됨`);
   };
 
   // 시트에서 가져오기
@@ -145,15 +176,6 @@ export function DataScreen() {
     try { await saveSession(session); } catch { /* ignore */ }
     setMsg(`✓ ${data.rows.length}행 가져옴`);
     importDataRef.current = null;
-  };
-
-  const toggleDeleteSelect = (id: string) => {
-    setSelectedForDelete((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   };
 
   return (
@@ -217,45 +239,53 @@ export function DataScreen() {
         >
           CSV
         </button>
-      </div>
-
-      {/* Select mode toggle */}
-      {sessions.length > 0 && (
-        <div style={{ padding: '0 16px 8px', display: 'flex', gap: 8, flexShrink: 0 }}>
+        <div style={{ position: 'relative' }}>
           <button
-            onClick={() => {
-              setSelectMode(!selectMode);
-              setSelectedForDelete(new Set());
-            }}
+            onClick={() => setLogMenuOpen((v) => !v)}
+            disabled={busy !== null}
             style={{
-              height: 36, padding: '0 12px', borderRadius: 10,
-              border: `1px solid ${selectMode ? T.blue : T.line}`,
-              background: selectMode ? T.blueGlow : 'transparent',
-              color: selectMode ? T.text : T.textDim,
-              fontSize: 13, fontWeight: 700, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: 6,
+              height: 52, padding: '0 14px', borderRadius: 14,
+              border: `1px solid ${T.lineStrong}`, background: T.card,
+              color: T.textDim, fontSize: 13, fontWeight: 700,
+              display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
             }}
+            title="로그 내보내기"
           >
-            {I.checkSquare(14, selectMode ? T.blue : T.textDim)}
-            {selectMode ? `선택됨 ${selectedForDelete.size}` : '선택'}
+            LOG
           </button>
-          {selectMode && selectedForDelete.size > 0 && (
-            <button
-              onClick={() => setBulkDeleteOpen(true)}
+          {logMenuOpen && (
+            <div
               style={{
-                marginLeft: 'auto',
-                height: 36, padding: '0 14px', borderRadius: 10,
-                border: 'none', background: T.red, color: '#fff',
-                fontSize: 13, fontWeight: 800, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: 6,
-                boxShadow: '0 2px 8px rgba(255,82,82,0.3)',
+                position: 'absolute', right: 0, top: 58, zIndex: 50,
+                background: T.card, border: `1px solid ${T.line}`, borderRadius: 12,
+                padding: '6px 0', minWidth: 160,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
               }}
+              onMouseLeave={() => setLogMenuOpen(false)}
             >
-              {I.trash(14, '#fff')} {selectedForDelete.size}개 삭제
-            </button>
+              <button
+                onClick={doLogDownload}
+                style={{
+                  width: '100%', padding: '12px 16px', background: 'transparent', border: 'none',
+                  color: T.text, fontSize: 14, fontWeight: 600, textAlign: 'left', cursor: 'pointer',
+                }}
+              >
+                ZIP 다운로드
+              </button>
+              <button
+                onClick={doLogUpload}
+                style={{
+                  width: '100%', padding: '12px 16px', background: 'transparent', border: 'none',
+                  color: T.text, fontSize: 14, fontWeight: 600, textAlign: 'left', cursor: 'pointer',
+                }}
+              >
+                Drive 업로드
+              </button>
+            </div>
           )}
         </div>
-      )}
+      </div>
+
 
       {(busy || msg) && (
         <div
@@ -300,9 +330,6 @@ export function DataScreen() {
               key={s.id}
               session={s}
               expanded={expandedSessionId === s.id}
-              selectMode={selectMode}
-              isSelected={selectedForDelete.has(s.id)}
-              onToggleSelect={() => toggleDeleteSelect(s.id)}
               onToggle={() => toggleExpand(s.id)}
               onDelete={() => setDeleteTarget(s)}
               onCellSave={(rowIndex, colId, value) => handleCellSave(s.id, rowIndex, colId, value)}
@@ -327,17 +354,6 @@ export function DataScreen() {
           danger
           onCancel={() => setDeleteTarget(null)}
           onConfirm={handleDeleteConfirm}
-        />
-      )}
-
-      {bulkDeleteOpen && (
-        <ConfirmModal
-          title="세션 일괄 삭제"
-          body={`선택한 ${selectedForDelete.size}개 세션을 삭제할까요?\n복구할 수 없습니다.`}
-          confirmLabel={`${selectedForDelete.size}개 삭제`}
-          danger
-          onCancel={() => setBulkDeleteOpen(false)}
-          onConfirm={handleBulkDelete}
         />
       )}
 
@@ -398,13 +414,14 @@ function SyncSessionModal({
 }: {
   sessions: Session[];
   onCancel: () => void;
-  onConfirm: (ids: string[]) => void;
+  onConfirm: (ids: string[], autoDelete: boolean) => void;
 }) {
   const defaultIds = useMemo(
     () => sessions.filter((s) => s.syncedRows < s.completedRows).map((s) => s.id),
     [sessions],
   );
   const [selected, setSelected] = useState<Set<string>>(new Set(defaultIds));
+  const [autoDelete, setAutoDelete] = useState(false);
   const toggle = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -492,35 +509,58 @@ function SyncSessionModal({
         </div>
         <div
           style={{
-            padding: '12px 16px',
-            display: 'flex', gap: 10,
+            padding: '10px 16px',
             borderTop: `1px solid ${T.line}`,
+            display: 'flex', flexDirection: 'column', gap: 10,
           }}
         >
+          {/* Auto-delete toggle */}
           <button
-            onClick={onCancel}
+            onClick={() => setAutoDelete((v) => !v)}
             style={{
-              flex: 1, height: 48, borderRadius: 14,
-              border: `1px solid ${T.lineStrong}`, background: 'transparent',
-              color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 10,
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              padding: '4px 0', color: 'inherit',
             }}
           >
-            취소
+            <div
+              style={{
+                width: 20, height: 20, borderRadius: 4, flexShrink: 0,
+                border: `2px solid ${autoDelete ? T.red : T.lineStrong}`,
+                background: autoDelete ? 'rgba(255,82,82,0.15)' : 'transparent',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              {autoDelete && I.check(12, T.red)}
+            </div>
+            <span style={{ fontSize: 13, color: T.textDim }}>업로드 성공 시 세션 삭제</span>
           </button>
-          <button
-            onClick={() => onConfirm([...selected])}
-            disabled={selected.size === 0}
-            style={{
-              flex: 1, height: 48, borderRadius: 14, border: 'none',
-              background: selected.size === 0 ? '#2A2D32' : T.blue,
-              color: selected.size === 0 ? T.textMute : '#fff',
-              fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
-              cursor: selected.size === 0 ? 'not-allowed' : 'pointer',
-              boxShadow: selected.size === 0 ? 'none' : `0 4px 14px ${T.blueGlow}`,
-            }}
-          >
-            추가 ({selected.size})
-          </button>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button
+              onClick={onCancel}
+              style={{
+                flex: 1, height: 48, borderRadius: 14,
+                border: `1px solid ${T.lineStrong}`, background: 'transparent',
+                color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+              }}
+            >
+              취소
+            </button>
+            <button
+              onClick={() => onConfirm([...selected], autoDelete)}
+              disabled={selected.size === 0}
+              style={{
+                flex: 1, height: 48, borderRadius: 14, border: 'none',
+                background: selected.size === 0 ? '#2A2D32' : T.blue,
+                color: selected.size === 0 ? T.textMute : '#fff',
+                fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
+                cursor: selected.size === 0 ? 'not-allowed' : 'pointer',
+                boxShadow: selected.size === 0 ? 'none' : `0 4px 14px ${T.blueGlow}`,
+              }}
+            >
+              추가 ({selected.size})
+            </button>
+          </div>
         </div>
       </div>
     </Backdrop>
@@ -743,14 +783,10 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
 
 // ─── session card ────────────────────────────────────────────
 function SessionCard({
-  session, expanded, selectMode, isSelected,
-  onToggleSelect, onToggle, onDelete, onCellSave,
+  session, expanded, onToggle, onDelete, onCellSave,
 }: {
   session: Session;
   expanded: boolean;
-  selectMode: boolean;
-  isSelected: boolean;
-  onToggleSelect: () => void;
   onToggle: () => void;
   onDelete: () => void;
   onCellSave: (rowIndex: number, colId: string, value: string) => void;
@@ -773,34 +809,20 @@ function SessionCard({
     <div
       style={{
         background: T.card, borderRadius: 12,
-        border: `1px solid ${
-          isSelected ? T.blue : expanded ? 'rgba(41,121,255,0.4)' : T.line
-        }`,
+        border: `1px solid ${expanded ? 'rgba(41,121,255,0.4)' : T.line}`,
         overflow: 'hidden',
         transition: 'border 200ms',
         flexShrink: 0,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'stretch' }}>
-        {selectMode && (
-          <button
-            onClick={onToggleSelect}
-            style={{
-              padding: '0 14px', background: 'transparent', border: 'none',
-              borderRight: `1px solid ${T.line}`,
-              display: 'flex', alignItems: 'center', cursor: 'pointer',
-            }}
-          >
-            <Checkbox checked={isSelected} />
-          </button>
-        )}
         <button
-          onClick={selectMode ? onToggleSelect : onToggle}
+          onClick={onToggle}
           style={{
             flex: 1, border: 'none', background: 'transparent',
-            padding: '16px 16px',
-            display: 'flex', alignItems: 'center', gap: 14,
-            cursor: 'pointer', textAlign: 'left', color: 'inherit', minHeight: 60,
+            padding: '14px 14px',
+            display: 'flex', alignItems: 'center', gap: 12,
+            cursor: 'pointer', textAlign: 'left', color: 'inherit', minHeight: 56,
           }}
         >
           <div>
@@ -855,22 +877,20 @@ function SessionCard({
             {I.chevron(18, T.textDim)}
           </div>
         </button>
-        {!selectMode && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            style={{
-              padding: '0 14px',
-              background: 'transparent', border: 'none', borderLeft: `1px solid ${T.line}`,
-              color: T.red, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-            title="세션 삭제"
-          >
-            {I.trash(18, T.red)}
-          </button>
-        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          style={{
+            padding: '0 12px',
+            background: 'transparent', border: 'none', borderLeft: `1px solid ${T.line}`,
+            color: T.red, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          title="세션 삭제"
+        >
+          {I.trash(18, T.red)}
+        </button>
       </div>
-      {expanded && !selectMode && <FullRowTable session={session} onCellSave={onCellSave} />}
+      {expanded && <FullRowTable session={session} onCellSave={onCellSave} />}
     </div>
   );
 }
@@ -959,6 +979,7 @@ function FullRowTable({
                   col={c}
                   value={r.values[c.id] ?? ''}
                   width={colWidthFor(c)}
+                  audioClipKey={r.audioClips?.[c.id]}
                   onSave={(v) => onCellSave(r.index, c.id, v)}
                 />
               ))}
@@ -984,19 +1005,28 @@ function FullRowTable({
 }
 
 function EditableCell({
-  col, value, width, onSave,
+  col, value, width, audioClipKey, onSave,
 }: {
   col: Column;
   value: string;
   width: number;
+  audioClipKey?: string;
   onSave: (v: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [local, setLocal] = useState(value);
+  const [playing, setPlaying] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
 
   useEffect(() => { if (!editing) setLocal(value); }, [value, editing]);
   useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
+
+  useEffect(() => () => {
+    audioRef.current?.pause();
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+  }, []);
 
   const commit = () => {
     if (local !== value) onSave(local);
@@ -1007,7 +1037,33 @@ function EditableCell({
     setEditing(false);
   };
 
+  const handlePlay = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (playing) {
+      audioRef.current?.pause();
+      setPlaying(false);
+      return;
+    }
+    if (!audioClipKey) return;
+    try {
+      const blob = await loadAudioClip(audioClipKey);
+      if (!blob) return;
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      objectUrlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => setPlaying(false);
+      audio.onerror = () => setPlaying(false);
+      await audio.play();
+      setPlaying(true);
+    } catch {
+      setPlaying(false);
+    }
+  };
+
   const isVoice = col.input === 'voice';
+  const hasClip = isVoice && !!audioClipKey;
   const inputMode = col.type === 'int' ? 'numeric' : col.type === 'float' ? 'decimal' : 'text';
 
   return (
@@ -1016,6 +1072,7 @@ function EditableCell({
         width, padding: 0,
         borderRight: `1px solid ${T.line}`,
         background: editing ? 'rgba(41,121,255,0.08)' : 'transparent',
+        display: 'flex', alignItems: 'stretch',
       }}
     >
       {editing ? (
@@ -1030,7 +1087,7 @@ function EditableCell({
             else if (e.key === 'Escape') cancel();
           }}
           style={{
-            width: '100%', height: '100%',
+            flex: 1, height: '100%',
             padding: '8px 8px',
             background: 'transparent', border: 'none', outline: 'none',
             color: T.text,
@@ -1040,21 +1097,39 @@ function EditableCell({
           }}
         />
       ) : (
-        <button
-          onClick={() => setEditing(true)}
-          style={{
-            width: '100%', minHeight: 36,
-            padding: '8px 8px',
-            background: 'transparent', border: 'none',
-            color: isVoice ? T.text : T.textDim,
-            fontSize: 14, fontWeight: 700,
-            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            textAlign: 'left', cursor: 'pointer',
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-          }}
-        >
-          {value || <span style={{ color: T.textMute, opacity: 0.5 }}>—</span>}
-        </button>
+        <>
+          <button
+            onClick={() => setEditing(true)}
+            style={{
+              flex: 1, minHeight: 36, minWidth: 0,
+              padding: '8px 8px',
+              background: 'transparent', border: 'none',
+              color: isVoice ? T.text : T.textDim,
+              fontSize: 14, fontWeight: 700,
+              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+              textAlign: 'left', cursor: 'pointer',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+          >
+            {value || <span style={{ color: T.textMute, opacity: 0.5 }}>—</span>}
+          </button>
+          {hasClip && (
+            <button
+              onClick={handlePlay}
+              title={playing ? '정지' : '음성 재생'}
+              style={{
+                flexShrink: 0,
+                width: 28, padding: '0 4px',
+                background: 'transparent', border: 'none',
+                color: playing ? T.amber : T.blue,
+                cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              {playing ? I.stop(12, T.amber) : I.play(12, T.blue)}
+            </button>
+          )}
+        </>
       )}
     </div>
   );

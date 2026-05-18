@@ -44,6 +44,8 @@ export interface SessionRow {
   values: Record<string, string>;
   /** Has been entered (voice or auto)? */
   complete: boolean;
+  /** colId → IDB key for audio clip blob */
+  audioClips?: Record<string, string>;
 }
 
 export interface Session {

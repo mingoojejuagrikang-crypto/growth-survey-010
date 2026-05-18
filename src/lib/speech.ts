@@ -65,7 +65,7 @@ export function createRecognition(): SpeechRecognitionLike | null {
 }
 
 export interface SpeechCallbacks {
-  onFinal: (text: string, alts: string[]) => void;
+  onFinal: (text: string, alts: string[], confidence: number) => void;
   onInterim?: (text: string) => void;
   onError?: (kind: string) => void;
   onStart?: () => void;
@@ -119,9 +119,10 @@ export class SpeechController {
       const r = e.results[e.results.length - 1];
       const final = r.isFinal;
       const text = (r[0]?.transcript || '').trim();
+      const confidence = r[0]?.confidence ?? 1;
       const alts: string[] = [];
       for (let i = 0; i < r.length; i++) alts.push(r[i].transcript.trim());
-      if (final) this.cb.onFinal(text, alts);
+      if (final) this.cb.onFinal(text, alts, confidence);
       else this.cb.onInterim?.(text);
     };
     const onError = (e: Event) => {
@@ -152,7 +153,7 @@ export class SpeechController {
           this.rec.start();
         }
       } catch { /* try again next tick */ }
-    }, 200);
+    }, 100);
   }
 }
 
@@ -202,6 +203,15 @@ export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
 
 export function cancelTts() {
   if (synth) synth.cancel();
+}
+
+/** Pre-warm the TTS engine to reduce first-utterance delay. */
+export function warmupTts() {
+  if (!synth) return;
+  const u = new SpeechSynthesisUtterance('');
+  u.volume = 0;
+  synth.speak(u);
+  synth.cancel();
 }
 
 /**

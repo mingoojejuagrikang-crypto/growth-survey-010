@@ -19,7 +19,7 @@ import {
   inferColumns,
   parseSpreadsheetId,
 } from '../lib/sheets';
-import { computeTotalRows } from '../lib/autoValue';
+import { computeTotalRows, nestedAutoValue, buildCyclingValues } from '../lib/autoValue';
 import { speak } from '../lib/speech';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
@@ -50,12 +50,13 @@ function MiniInput({
 }
 
 function SegmentToggle<V extends string>({
-  label, value, options, onChange,
+  label, value, options, onChange, disabled,
 }: {
   label: string;
   value: V;
   options: { id: V; label: string }[];
   onChange: (v: V) => void;
+  disabled?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -66,6 +67,7 @@ function SegmentToggle<V extends string>({
         style={{
           display: 'inline-flex', background: T.inputBg, borderRadius: 10,
           padding: 3, border: `1px solid ${T.line}`, height: 36,
+          opacity: disabled ? 0.5 : 1,
         }}
       >
         {options.map((o) => {
@@ -73,12 +75,13 @@ function SegmentToggle<V extends string>({
           return (
             <button
               key={o.id}
-              onClick={() => onChange(o.id)}
+              onClick={() => !disabled && onChange(o.id)}
               style={{
                 border: 'none', background: active ? T.blue : 'transparent',
                 color: active ? '#fff' : T.textDim,
                 fontSize: 14, fontWeight: active ? 700 : 600,
-                padding: '0 14px', borderRadius: 8, cursor: 'pointer',
+                padding: '0 14px', borderRadius: 8,
+                cursor: disabled ? 'not-allowed' : 'pointer',
                 letterSpacing: -0.1, height: '100%', whiteSpace: 'nowrap',
               }}
             >
@@ -393,7 +396,11 @@ function ColumnCard({
             { id: 'auto', label: '자동' },
             { id: 'voice', label: '음성' },
           ]}
-          onChange={(v) => onChange({ ...col, input: v })}
+          onChange={(v) => {
+            const updates: Partial<typeof col> = { input: v };
+            if (v === 'voice') updates.ttsAnnounce = true;
+            onChange({ ...col, ...updates });
+          }}
         />
         <SegmentToggle
           label="TTS"
@@ -402,7 +409,11 @@ function ColumnCard({
             { id: 'on', label: '유' },
             { id: 'off', label: '무' },
           ]}
-          onChange={(v) => onChange({ ...col, ttsAnnounce: v === 'on' })}
+          onChange={(v) => {
+            if (col.input === 'voice') return; // locked to 'on' for voice columns
+            onChange({ ...col, ttsAnnounce: v === 'on' });
+          }}
+          disabled={col.input === 'voice'}
         />
       </div>
 
@@ -479,7 +490,9 @@ export function SettingsScreen() {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dropIdx, setDropIdx] = useState<number | null>(null);
   const [confirmedUrl, setConfirmedUrl] = useState<string>(s.sheetUrl);
+  const [tablePreviewOpen, setTablePreviewOpen] = useState(false);
   const googleConfigured = isGoogleConfigured();
+  const previewRowCount = computeTotalRows(s.columns);
 
   useEffect(() => {
     const t = getStoredToken();
@@ -589,6 +602,7 @@ export function SettingsScreen() {
     }
     const total = computeTotalRows(s.columns);
     s.set({ tableGenerated: true, totalRows: total });
+    setTablePreviewOpen(true);
   };
 
   const handleDragStart = (idx: number) => setDragIdx(idx);
@@ -815,48 +829,227 @@ export function SettingsScreen() {
           padding: '12px 16px 12px',
           borderTop: `1px solid ${T.line}`,
           background: 'rgba(255,255,255,0.02)',
-          display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+          display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0,
         }}
       >
-        {s.tableGenerated ? (
-          <>
-            <div
-              style={{
-                flex: 1, height: 56, borderRadius: 28,
-                background: 'rgba(0,200,83,0.12)',
-                border: '1px solid rgba(0,200,83,0.35)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                fontSize: 16, fontWeight: 700, color: T.green,
-              }}
-            >
-              {I.check(20, T.green)} 총 {s.totalRows}행 생성됨
-            </div>
+        {!s.tableGenerated && s.columns.length > 0 && previewRowCount > 0 && (
+          <div style={{ textAlign: 'center', fontSize: 13, color: T.textMute }}>
+            현재 설정으로 <span style={{ color: T.blue, fontWeight: 700 }}>{previewRowCount}행</span> 생성 예정
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {s.tableGenerated ? (
+            <>
+              <button
+                onClick={() => setTablePreviewOpen(true)}
+                style={{
+                  flex: 1, height: 56, borderRadius: 28,
+                  background: 'rgba(0,200,83,0.12)',
+                  border: '1px solid rgba(0,200,83,0.35)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                  fontSize: 16, fontWeight: 700, color: T.green,
+                  cursor: 'pointer',
+                }}
+              >
+                {I.check(20, T.green)} 총 {s.totalRows}행 생성됨 (미리보기)
+              </button>
+              <button
+                onClick={onGenerate}
+                style={{
+                  height: 56, padding: '0 18px', borderRadius: 28,
+                  border: `1px solid ${T.lineStrong}`, background: 'transparent',
+                  color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                재생성
+              </button>
+            </>
+          ) : (
             <button
               onClick={onGenerate}
               style={{
-                height: 56, padding: '0 18px', borderRadius: 28,
-                border: `1px solid ${T.lineStrong}`, background: 'transparent',
-                color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+                flex: 1, height: 56, borderRadius: 28, border: 'none',
+                background: T.blue, color: '#fff',
+                fontSize: 18, fontWeight: 800, letterSpacing: -0.2,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                cursor: 'pointer',
+                boxShadow: `0 6px 18px ${T.blueGlow}`,
               }}
             >
-              재생성
+              {I.table(20, '#fff')} 오늘 테이블 생성
             </button>
-          </>
-        ) : (
+          )}
+        </div>
+      </div>
+
+      {tablePreviewOpen && (
+        <TablePreviewModal
+          columns={s.columns}
+          totalRows={s.totalRows}
+          onClose={() => setTablePreviewOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── table preview modal ───────────────────────────────────────
+function TablePreviewModal({
+  columns, totalRows, onClose,
+}: {
+  columns: import('../types').Column[];
+  totalRows: number;
+  onClose: () => void;
+}) {
+  const MAX_PREVIEW = 50;
+  const displayRows = Math.min(totalRows, MAX_PREVIEW);
+  const colWidths = columns.map((c) =>
+    c.type === 'date' ? 110 : c.type === 'text' || c.type === 'options' ? 100 : 70,
+  );
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100,
+        background: 'rgba(0,0,0,0.6)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
+        animation: 'fade-up 200ms ease-out',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 480, maxHeight: '84vh',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div
+          style={{
+            padding: '14px 16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            borderBottom: `1px solid ${T.line}`,
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>테이블 미리보기</div>
+            <div style={{ fontSize: 12, color: T.textMute, marginTop: 2 }}>
+              총 {totalRows}행
+              {totalRows > MAX_PREVIEW ? ` (처음 ${MAX_PREVIEW}행 표시)` : ''}
+            </div>
+          </div>
           <button
-            onClick={onGenerate}
+            onClick={onClose}
             style={{
-              flex: 1, height: 56, borderRadius: 28, border: 'none',
-              background: T.blue, color: '#fff',
-              fontSize: 18, fontWeight: 800, letterSpacing: -0.2,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-              cursor: 'pointer',
-              boxShadow: `0 6px 18px ${T.blueGlow}`,
+              width: 36, height: 36, borderRadius: 18,
+              border: 'none', background: 'rgba(255,255,255,0.06)',
+              color: T.textDim, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}
           >
-            {I.table(20, '#fff')} 오늘 테이블 생성
+            {I.close(18, T.textDim)}
           </button>
-        )}
+        </div>
+
+        <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          <div style={{ minWidth: 'max-content' }}>
+            {/* Header */}
+            <div
+              style={{
+                display: 'flex', position: 'sticky', top: 0, zIndex: 2,
+                background: T.card, borderBottom: `1px solid ${T.line}`,
+              }}
+            >
+              <div
+                style={{
+                  width: 36, padding: '8px 6px', fontSize: 11, fontWeight: 700,
+                  color: T.textMute, textAlign: 'center', borderRight: `1px solid ${T.line}`,
+                }}
+              >
+                #
+              </div>
+              {columns.map((c, ci) => (
+                <div
+                  key={c.id}
+                  style={{
+                    width: colWidths[ci], padding: '8px 8px',
+                    fontSize: 12, fontWeight: 700, color: c.input === 'voice' ? T.blue : T.textDim,
+                    borderRight: `1px solid ${T.line}`,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}
+                >
+                  {c.name}
+                  {c.input === 'voice' && (
+                    <span style={{ marginLeft: 4, fontSize: 10, color: T.blue }}>음성</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            {/* Rows */}
+            {Array.from({ length: displayRows }, (_, i) => {
+              const rowIndex = i + 1;
+              const auto = buildCyclingValues(columns, rowIndex);
+              return (
+                <div
+                  key={rowIndex}
+                  style={{ display: 'flex', borderBottom: `1px solid ${T.line}` }}
+                >
+                  <div
+                    style={{
+                      width: 36, padding: '7px 6px', fontSize: 12,
+                      color: T.textMute, textAlign: 'center',
+                      borderRight: `1px solid ${T.line}`,
+                      fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontWeight: 700,
+                    }}
+                  >
+                    {rowIndex}
+                  </div>
+                  {columns.map((c, ci) => {
+                    const val = c.input === 'voice'
+                      ? <span style={{ color: T.textMute, opacity: 0.4 }}>—</span>
+                      : (nestedAutoValue(columns, c, rowIndex) || auto[c.id] || (
+                        <span style={{ color: T.textMute, opacity: 0.3 }}>빈값</span>
+                      ));
+                    return (
+                      <div
+                        key={c.id}
+                        style={{
+                          width: colWidths[ci], padding: '7px 8px',
+                          fontSize: 13, fontWeight: 700,
+                          color: c.input === 'voice' ? T.textMute : T.text,
+                          borderRight: `1px solid ${T.line}`,
+                          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {val}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ padding: '12px 16px', borderTop: `1px solid ${T.line}` }}>
+          <button
+            onClick={onClose}
+            style={{
+              width: '100%', height: 48, borderRadius: 14, border: 'none',
+              background: T.blue, color: '#fff',
+              fontSize: 15, fontWeight: 800, cursor: 'pointer',
+              boxShadow: `0 4px 14px ${T.blueGlow}`,
+            }}
+          >
+            확인
+          </button>
+        </div>
       </div>
     </div>
   );

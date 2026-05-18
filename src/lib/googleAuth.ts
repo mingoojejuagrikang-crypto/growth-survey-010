@@ -13,7 +13,11 @@
  */
 
 const GIS_SRC = 'https://accounts.google.com/gsi/client';
-const SCOPE = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email';
+const SCOPE = [
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/drive.file',
+].join(' ');
 
 interface TokenResponse {
   access_token: string;

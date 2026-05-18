@@ -3,10 +3,12 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { parseKoreanNumber, detectCommand, extractModifyValue } from './koreanNum';
-import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts } from './speech';
+import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
-import { saveSession } from './db';
+import { saveSession, saveAudioClip } from './db';
+import { AudioRecorder } from './audioRecorder';
+import { logger } from './logger';
 
 interface AwaitingField {
   row: number;
@@ -21,6 +23,11 @@ export function useVoiceSession() {
   const sessionIdRef = useRef<string>('');
   const sessionLabelRef = useRef<string | undefined>(undefined);
   const awaitingFieldRef = useRef<AwaitingField | null>(null);
+  const epochRef = useRef(0);
+  const lastConfidenceRef = useRef<number>(1);
+  const recorderRef = useRef<AudioRecorder | null>(null);
+  const clipStartRowRef = useRef<number>(0);
+  const clipStartColIdRef = useRef<string>('');
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
@@ -38,13 +45,17 @@ export function useVoiceSession() {
   const isRowVoiceComplete = (row: number, vCols: Column[]): boolean => {
     if (useSessionStore.getState().isRowComplete(row)) return true;
     const values = useSessionStore.getState().getRowValues(row);
-    return vCols.every((c) => Object.prototype.hasOwnProperty.call(values, c.id));
+    return vCols.every((c) => {
+      const v = values[c.id];
+      return v !== undefined && v !== '';
+    });
   };
 
   const firstIncompleteColIdx = (row: number, vCols: Column[]): number => {
     const values = useSessionStore.getState().getRowValues(row);
     for (let i = 0; i < vCols.length; i++) {
-      if (!Object.prototype.hasOwnProperty.call(values, vCols[i].id)) return i;
+      const v = values[vCols[i].id];
+      if (v === undefined || v === '') return i;
     }
     return 0;
   };
@@ -69,10 +80,16 @@ export function useVoiceSession() {
       const auto = buildCyclingValues(settings.columns, r);
       const fixedAndAuto = autoNonCyclingValues(settings.columns, r);
       const voiceVals = sess.getRowValues(r);
+      // Collect any stored audio clips for this row from existing session
+      const existingSession = useDataStore.getState().sessions.find(
+        (s) => s.id === sessionIdRef.current,
+      );
+      const existingRow = existingSession?.rows.find((row) => row.index === r);
       return {
         index: r,
         values: { ...fixedAndAuto, ...auto, ...voiceVals },
         complete: true,
+        audioClips: existingRow?.audioClips,
       };
     });
     const session: Session = {
@@ -112,8 +129,9 @@ export function useVoiceSession() {
 
   const announceField = useCallback(
     async (col: Column, opts?: { isModify?: boolean }) => {
+      const row = useSessionStore.getState().activeRow;
       awaitingFieldRef.current = {
-        row: useSessionStore.getState().activeRow,
+        row,
         colId: col.id,
         name: col.name,
         isModify: opts?.isModify,
@@ -123,6 +141,10 @@ export function useVoiceSession() {
         : `${col.name} 말씀해 주세요.`;
       useSessionStore.getState().setLastTts(hint);
       await say(opts?.isModify ? `정정. ${col.name}.` : `${col.name}.`, false);
+      // Start recording clip after TTS ends
+      clipStartRowRef.current = row;
+      clipStartColIdRef.current = col.id;
+      recorderRef.current?.startClip();
     },
     [say],
   );
@@ -139,10 +161,12 @@ export function useVoiceSession() {
     // Still voice cols in this row?
     const nextIdx = sess.activeColIdx + 1;
     if (nextIdx < vc.length) {
-      // Skip cols already filled (in case we're recovering from modify/jump)
+      // Skip cols already filled with non-empty values (empty string = cleared by modify)
       const values = sess.getRowValues(row);
       let target = nextIdx;
-      while (target < vc.length && Object.prototype.hasOwnProperty.call(values, vc[target].id)) {
+      while (target < vc.length) {
+        const v = values[vc[target].id];
+        if (v === undefined || v === '') break;
         target++;
       }
       if (target < vc.length) {
@@ -323,31 +347,64 @@ export function useVoiceSession() {
   );
 
   // ── final result handler ───────────────────────────────────
-  const handleFinal = useCallback(async (text: string, _alts: string[]) => {
+  const handleFinal = useCallback(async (text: string, _alts: string[], confidence: number) => {
     const awaiting = awaitingFieldRef.current;
     if (!awaiting) return;
+    const myEpoch = ++epochRef.current;
     const cmd = detectCommand(text);
 
+    // Commands interrupt TTS immediately
     if (cmd === 'end') {
+      cancelTts();
       await stop(true);
       return;
     }
     if (cmd === 'pause') {
+      cancelTts();
       await pause();
       return;
     }
     if (cmd === 'skip') {
+      cancelTts();
       await skipRow();
       return;
     }
     if (cmd === 'modify') {
+      cancelTts();
+      // Prevent nested modify: if already in modify mode, redo current field
+      if (awaiting.isModify) {
+        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+        return;
+      }
       const modifyVal = extractModifyValue(text);
       await enterModifyMode(modifyVal || undefined);
       return;
     }
     if (cmd === 'cancel' || cmd === 'redo') {
+      cancelTts();
       useSessionStore.getState().setRecognized('');
       await say(`${awaiting.name} 다시 말씀해 주세요.`);
+      return;
+    }
+
+    // Log STT event
+    lastConfidenceRef.current = confidence;
+    logger.log({
+      type: 'stt',
+      sessionId: sessionIdRef.current,
+      row: awaiting.row,
+      colId: awaiting.colId,
+      colName: awaiting.name,
+      text,
+      confidence,
+      alts: _alts,
+    });
+
+    // Low confidence — re-ask
+    if (confidence > 0 && confidence < 0.65) {
+      recorderRef.current?.startClip(); // restart clip
+      useSessionStore.getState().setRecognized('');
+      await say(`잘 못 들었습니다. ${awaiting.name} 다시 말씀해 주세요.`);
       return;
     }
 
@@ -355,9 +412,40 @@ export function useVoiceSession() {
     const col = getColById(awaiting.colId);
     const parsed = col ? parseValueForCol(col, text) : null;
     if (parsed === null) {
+      recorderRef.current?.startClip(); // restart clip
       await say(`${awaiting.name} 다시 말씀해 주세요.`);
       return;
     }
+
+    // Stop recording and save clip
+    const clipBlob = await recorderRef.current?.stopClip() ?? null;
+    if (clipBlob && clipBlob.size > 1000) {
+      const clipKey = `${sessionIdRef.current}:${awaiting.row}:${awaiting.colId}`;
+      try { await saveAudioClip(clipKey, clipBlob); } catch { /* ignore */ }
+      // Update session row with clip reference
+      const ds = useDataStore.getState();
+      const session = ds.sessions.find((s) => s.id === sessionIdRef.current);
+      if (session) {
+        const updatedRows = session.rows.map((r) =>
+          r.index === awaiting.row
+            ? { ...r, audioClips: { ...r.audioClips, [awaiting.colId]: clipKey } }
+            : r,
+        );
+        ds.upsertSession({ ...session, rows: updatedRows });
+      }
+    }
+
+    logger.log({
+      type: 'value',
+      sessionId: sessionIdRef.current,
+      row: awaiting.row,
+      colId: awaiting.colId,
+      colName: awaiting.name,
+      text,
+      parsed,
+      confidence,
+    });
+
     const sess = useSessionStore.getState();
     sess.setRowValue(sess.activeRow, awaiting.colId, parsed);
     sess.setRecognized(parsed);
@@ -366,6 +454,8 @@ export function useVoiceSession() {
     } else {
       await say(formatForTts(parsed));
     }
+    // Guard against race: another handleFinal ran while we were awaiting
+    if (epochRef.current !== myEpoch) return;
     await advance();
   }, [advance, enterModifyMode, say, skipRow]);
 
@@ -391,6 +481,14 @@ export function useVoiceSession() {
       return false;
     }
 
+    warmupTts();
+    epochRef.current = 0;
+    logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'start' });
+
+    // Init audio recorder (best-effort, don't block if permission denied)
+    if (!recorderRef.current) recorderRef.current = new AudioRecorder();
+    await recorderRef.current.init().catch(() => {});
+
     await say('음성 입력을 시작합니다.');
     await announceRowDiff(null, 1);
 
@@ -409,6 +507,9 @@ export function useVoiceSession() {
     ctrlRef.current = null;
     cancelTts();
     awaitingFieldRef.current = null;
+    recorderRef.current?.dispose();
+    recorderRef.current = null;
+    logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'stop' });
     if (announce) await say('입력을 종료합니다.');
     useSessionStore.getState().setPhase('ready');
     void persistSession();
@@ -429,6 +530,7 @@ export function useVoiceSession() {
     const sess = useSessionStore.getState();
     if (sess.phase !== 'paused') return;
     sess.setPhase('active');
+    epochRef.current = 0;
     ctrlRef.current = new SpeechController({
       onFinal: handleFinal,
       onError: () => {},
@@ -445,9 +547,10 @@ export function useVoiceSession() {
   useEffect(() => () => {
     ctrlRef.current?.stop();
     cancelTts();
+    recorderRef.current?.dispose();
   }, []);
 
-  return { start, stop, restartFromCol, jumpToRow, pause, resume };
+  return { start, stop, restartFromCol, jumpToRow, pause, resume, lastConfidenceRef };
 }
 
 // ─── helpers ─────────────────────────────────────────────────
