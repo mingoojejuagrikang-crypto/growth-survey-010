@@ -78,9 +78,28 @@ export class SpeechController {
   private cb: SpeechCallbacks;
   private active = false;
   private restartingTimer: number | null = null;
+  /** True while TTS is speaking — prevents STT restart to avoid echo feedback */
+  private ttsMuted = false;
 
   constructor(cb: SpeechCallbacks) {
     this.cb = cb;
+  }
+
+  /** Called when TTS utterance starts — aborts active STT to prevent echo */
+  muteForTts() {
+    this.ttsMuted = true;
+    // Cancel any pending STT restart from a previous unmuteForTts()
+    if (this.restartingTimer !== null) {
+      window.clearTimeout(this.restartingTimer);
+      this.restartingTimer = null;
+    }
+    try { this.rec?.abort(); } catch { /* ignore */ }
+  }
+
+  /** Called when TTS utterance ends — resumes STT after short delay to clear echo */
+  unmuteForTts() {
+    this.ttsMuted = false;
+    this.scheduleRestart(150);
   }
 
   start() {
@@ -102,6 +121,7 @@ export class SpeechController {
 
   stop() {
     this.active = false;
+    this.ttsMuted = false;
     if (this.restartingTimer !== null) {
       window.clearTimeout(this.restartingTimer);
       this.restartingTimer = null;
@@ -141,11 +161,12 @@ export class SpeechController {
     rec.addEventListener('end', onEnd);
   }
 
-  private scheduleRestart() {
+  private scheduleRestart(delay = 100) {
+    if (this.ttsMuted) return;  // TTS 재생 중에는 재시작 안 함
     if (this.restartingTimer !== null) return;
     this.restartingTimer = window.setTimeout(() => {
       this.restartingTimer = null;
-      if (!this.active) return;
+      if (!this.active || this.ttsMuted) return;
       try {
         this.rec = createRecognition();
         if (this.rec) {
@@ -153,8 +174,14 @@ export class SpeechController {
           this.rec.start();
         }
       } catch { /* try again next tick */ }
-    }, 100);
+    }, delay);
   }
+}
+
+// ─── Active controller reference (for TTS mute integration) ───
+let _activeController: SpeechController | null = null;
+export function setActiveController(ctrl: SpeechController | null) {
+  _activeController = ctrl;
 }
 
 // ─── TTS ───────────────────────────────────────────────────────
@@ -195,8 +222,9 @@ export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
     u.rate = opts.rate ?? 1.05;
     u.pitch = opts.pitch ?? 1;
     u.volume = opts.volume ?? 1;
-    u.onend = () => resolve();
-    u.onerror = () => resolve();
+    u.onstart = () => { _activeController?.muteForTts(); };
+    u.onend = () => { _activeController?.unmuteForTts(); resolve(); };
+    u.onerror = () => { _activeController?.unmuteForTts(); resolve(); };
     synth.speak(u);
   });
 }

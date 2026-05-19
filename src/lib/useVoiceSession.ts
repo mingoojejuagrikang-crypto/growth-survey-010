@@ -3,7 +3,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { parseKoreanNumber, detectCommand, extractModifyValue } from './koreanNum';
-import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts } from './speech';
+import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
 import { saveSession, saveAudioClip } from './db';
@@ -35,7 +35,15 @@ export function useVoiceSession() {
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
   const say = useCallback(async (text: string, interrupt = true) => {
     if (!text) return;
+    const ttsStart = Date.now();
     await speak(text, { interrupt, rate: getTtsRate() });
+    logger.log({
+      type: 'tts',
+      ttsText: text,
+      durationMs: Date.now() - ttsStart,
+      sessionId: sessionIdRef.current,
+      row: useSessionStore.getState().activeRow,
+    });
   }, []);
 
   const getColById = (id: string): Column | null =>
@@ -187,7 +195,7 @@ export function useVoiceSession() {
     sess.markRowComplete(row);
     sess.setPhase('complete');
     void persistSession();
-    await say(`${row}행 완료.`);
+    await say(`${row}행 완료.`, false); // false: 에코 TTS 뒤에 큐잉 (에코 캔슬 방지)
 
     // If returnRow set (came from modify/jump), go back
     const ret = sess.returnRow;
@@ -360,6 +368,17 @@ export function useVoiceSession() {
     const cmd = detectCommand(text);
 
     // Commands interrupt TTS immediately
+    if (cmd) {
+      logger.log({
+        type: 'command',
+        text,
+        parsed: cmd,
+        confidence,
+        sessionId: sessionIdRef.current,
+        row: awaiting.row,
+        colId: awaiting.colId,
+      });
+    }
     if (cmd === 'end') {
       cancelTts();
       await stop(true);
@@ -449,11 +468,12 @@ export function useVoiceSession() {
     const sess = useSessionStore.getState();
     sess.setRowValue(sess.activeRow, awaiting.colId, parsed);
     sess.setRecognized(parsed);
-    if (awaiting.isModify) {
-      await say(`정정 ${awaiting.name} ${formatForTts(parsed)}`);
-    } else {
-      await say(formatForTts(parsed));
-    }
+    // Fix-D: 에코 TTS를 await 없이 큐잉 → advance()가 즉시 다음 필드 안내를 에코 직후에 큐잉
+    // 결과적으로 "에코. 다음필드." 가 끊김 없이 연속 재생됨
+    const echoText = awaiting.isModify
+      ? `정정 ${awaiting.name} ${formatForTts(parsed)}`
+      : formatForTts(parsed);
+    speak(echoText, { interrupt: true, rate: getTtsRate() });
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
     await advance();
@@ -497,6 +517,7 @@ export function useVoiceSession() {
       onFinal: handleFinal,
       onError: () => {},
     });
+    setActiveController(ctrlRef.current);
     ctrlRef.current.start();
 
     await announceField(vc[0]);
@@ -504,6 +525,7 @@ export function useVoiceSession() {
   }, [announceField, announceRowDiff, handleFinal, say]);
 
   const stop = useCallback(async (announce = true) => {
+    setActiveController(null);
     ctrlRef.current?.stop();
     ctrlRef.current = null;
     cancelTts();
@@ -518,6 +540,7 @@ export function useVoiceSession() {
 
   /** Pause STT + TTS without finalizing. UI shows paused state. */
   const pause = useCallback(async () => {
+    setActiveController(null);
     ctrlRef.current?.stop();
     ctrlRef.current = null;
     cancelTts();
@@ -536,6 +559,7 @@ export function useVoiceSession() {
       onFinal: handleFinal,
       onError: () => {},
     });
+    setActiveController(ctrlRef.current);
     ctrlRef.current.start();
     // Re-announce current voice column
     const vc = voiceColsList();
@@ -546,6 +570,7 @@ export function useVoiceSession() {
 
   // unmount cleanup
   useEffect(() => () => {
+    setActiveController(null);
     ctrlRef.current?.stop();
     cancelTts();
     recorderRef.current?.dispose();

@@ -229,7 +229,8 @@ export type VoiceCommand = 'modify' | 'cancel' | 'redo' | 'end' | 'skip' | 'paus
 
 export function detectCommand(raw: string): VoiceCommand {
   const s = raw.replace(/[\s.,]+/g, '');
-  if (/^(수정|정정)/.test(s)) return 'modify';
+  if (/^(수정|정정)/.test(s)) return 'modify';                        // 전치: "수정 178.1"
+  if (/(수정|정정)$/.test(s) && /^[0-9]/.test(s)) return 'modify';  // 후치: "178.1 정정" (숫자 시작만)
   if (/^(취소|지우기|지워)/.test(s)) return 'cancel';
   if (/^(일시정지|일시중지|멈춤|정지)/.test(s)) return 'pause';
   if (/^(다시|재입력)/.test(s)) return 'redo';
@@ -238,9 +239,13 @@ export function detectCommand(raw: string): VoiceCommand {
   return null;
 }
 
-/** "수정 18.4" → "18.4" */
+/** "수정 18.4" → "18.4",  "178.1 정정" → "178.1" */
 export function extractModifyValue(raw: string): string | null {
-  const m = raw.match(/(?:수정|정정)[\s,.]*(.+)/);
-  if (!m) return null;
-  return m[1].trim();
+  // 전치: "수정 178.1" → "178.1"
+  const prefix = raw.match(/(?:수정|정정)[\s,.]*(.+)/);
+  if (prefix) return prefix[1].trim();
+  // 후치: "178.1 수정" → "178.1"
+  const suffix = raw.match(/^(.+?)[\s,.]*(?:수정|정정)$/);
+  if (suffix && /^[0-9]/.test(suffix[1].trim())) return suffix[1].trim();
+  return null;
 }

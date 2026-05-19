@@ -39,6 +39,11 @@ const cmdCases = [
   ['수정', 'modify'],
   ['수정 35.1', 'modify'],
   ['정정 일점오', 'modify'],
+  // Fix-A: 후치 정정 감지 (숫자로 시작하는 경우만 — 오탐 방지)
+  ['178.1 정정', 'modify'],
+  ['35.1 정정', 'modify'],
+  ['오십 수정', null],          // 한글 숫자 후치는 오탐 우려로 미지원 (전치 "수정 오십" 사용)
+
   ['취소', 'cancel'],
   ['다시', 'redo'],
   ['종료', 'end'],
@@ -59,6 +64,22 @@ for (const [input, expected] of cmdCases) {
   if (ok) pass++;
   else fail++;
   console.log(`${ok ? '✓' : '✗'}  detectCommand(${JSON.stringify(input)}) → ${got}`);
+}
+
+// Fix-A: extractModifyValue 후치 케이스
+const extractCases = [
+  ['수정 178.1', '178.1'],
+  ['정정 35.1', '35.1'],
+  ['178.1 정정', '178.1'],
+  ['오십 수정', null],          // detectCommand와 동일하게 null (한글 후치 미지원)
+  ['35.1 정정', '35.1'],
+];
+for (const [input, expected] of extractCases) {
+  const got = extractModifyValue(input);
+  const ok = got === expected;
+  if (ok) pass++;
+  else fail++;
+  console.log(`${ok ? '✓' : '✗'}  extractModifyValue(${JSON.stringify(input)}) → ${JSON.stringify(got)} ${ok ? '' : `   expected: ${JSON.stringify(expected)}`}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
