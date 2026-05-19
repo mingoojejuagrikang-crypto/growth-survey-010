@@ -30,6 +30,8 @@ export function useVoiceSession() {
   const clipStartColIdRef = useRef<string>('');
   // rowIndex → colId → IDB key; accumulated in-memory until persistSession writes to dataStore
   const pendingClipsRef = useRef<Record<number, Record<string, string>>>({});
+  // Codex 재검증 MEDIUM: in-flight clip save promises; stop()/pause()가 끝나기 전 flush
+  const pendingClipSavesRef = useRef<Set<Promise<unknown>>>(new Set());
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
@@ -506,19 +508,34 @@ export function useVoiceSession() {
     });
 
     // 클립 저장은 fully fire-and-forget — advance()를 블록하지 않음
-    // stopClip()의 MediaRecorder.onstop 대기 (~30-100ms) + IndexedDB put 모두 백그라운드로
+    // Codex 재검증 MEDIUM 수정:
+    //   1) clipKey를 pendingClipsRef에 사전 등록 (race 차단) — persistSession이 먼저 돌아도 키가 누락되지 않음
+    //   2) pendingClipSavesRef로 in-flight save를 추적 → stop()에서 flush 후 persistSession 재실행
+    //   3) save 실패 시 사전 등록 키를 제거 (참조 없는 키 방지)
     const clipKey = `${sessionIdRef.current}:${awaiting.row}:${awaiting.colId}`;
     const clipAwaitingRow = awaiting.row;
     const clipAwaitingColId = awaiting.colId;
-    recorderRef.current?.stopClip().then((clipBlob) => {
-      if (!clipBlob || clipBlob.size <= 200) return;
-      void saveAudioClip(clipKey, clipBlob).then(() => {
-        pendingClipsRef.current[clipAwaitingRow] = {
-          ...pendingClipsRef.current[clipAwaitingRow],
-          [clipAwaitingColId]: clipKey,
-        };
-      }).catch(() => { /* ignore IDB errors */ });
-    }).catch(() => { /* ignore stopClip errors */ });
+    pendingClipsRef.current[clipAwaitingRow] = {
+      ...pendingClipsRef.current[clipAwaitingRow],
+      [clipAwaitingColId]: clipKey,
+    };
+    const savePromise = (async () => {
+      try {
+        const clipBlob = await recorderRef.current?.stopClip();
+        if (!clipBlob || clipBlob.size <= 200) {
+          // 너무 작거나 없으면 키 회수
+          const m = pendingClipsRef.current[clipAwaitingRow];
+          if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+          return;
+        }
+        await saveAudioClip(clipKey, clipBlob);
+      } catch {
+        const m = pendingClipsRef.current[clipAwaitingRow];
+        if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+      }
+    })();
+    pendingClipSavesRef.current.add(savePromise);
+    void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
 
     logger.log({
       type: 'value',
@@ -592,6 +609,11 @@ export function useVoiceSession() {
     logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'stop' });
     if (announce) await say('입력을 종료합니다.');
     useSessionStore.getState().setPhase('ready');
+    // Codex 재검증 MEDIUM: 마지막 행의 클립 저장이 완료될 때까지 대기 후 persistSession.
+    // dispose()가 MediaRecorder.stop()을 호출 → onstop 이벤트 → 대기 중인 stopClip Promise 해소.
+    if (pendingClipSavesRef.current.size > 0) {
+      await Promise.allSettled(Array.from(pendingClipSavesRef.current));
+    }
     void persistSession();
   }, [persistSession, say]);
 

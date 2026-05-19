@@ -66,11 +66,12 @@ export function DataScreen() {
     }
   };
 
-  const runSyncInner = async (ids: string[]): Promise<SyncReport | null> => {
+  const runSyncInner = async (ids: string[]): Promise<{ report: SyncReport; backupOk: boolean } | null> => {
     if (ids.length === 0) return null;
     lastSelectedIdsRef.current = ids;
     setBusy('시트에 추가 중...');
     setMsg(null);
+    let backupOk = false;
     try {
       const report = await syncSelected(ids);
       if (report.message) {
@@ -81,19 +82,29 @@ export function DataScreen() {
       } else if (report.ok > 0) {
         setMsg(`✓ ${report.rows}행을 시트에 추가했습니다`);
         // v5.2 Data-1 (Codex-2 수정): 시트에 실제 업로드된 세션의 로그/클립만 Drive에 백업.
-        // 이전 구현은 IndexedDB의 모든 클립과 이벤트를 무차별 전송하여 미동의 데이터 유출 위험.
-        if (report.successIds.length > 0) {
+        // Codex 재검증 HIGH-1: 설정 토글 (autoUploadLogs)로 사용자가 비활성화 가능.
+        const settings = useSettingsStore.getState();
+        if (settings.autoUploadLogs && report.successIds.length > 0) {
           try {
             const blob = await exportLogZip(report.successIds);
             const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
             await uploadLogToDrive(blob, filename);
+            backupOk = true;
             setMsg((m) => (m ? `${m} · 로그 Drive 백업됨` : '✓ 로그 Drive 백업됨'));
-          } catch { /* 로그 백업 실패는 시트 추가 성공에 영향 없음 */ }
+          } catch (err) {
+            // Codex 재검증 HIGH-2: 백업 실패를 명시적으로 표시 (autoDelete 차단 조건이 됨).
+            setMsg((m) => (m ? `${m} · ⚠️ 로그 백업 실패` : '⚠️ 시트 추가 OK, 로그 백업 실패'));
+            console.warn('Drive 로그 업로드 실패', err);
+          }
+        } else if (!settings.autoUploadLogs) {
+          // 토글 비활성 — 백업 시도 자체를 안 했으므로 "backupOk = true"로 간주 (autoDelete 허용)
+          // 사용자가 자발적으로 백업 OFF 한 상태에서는 로컬에서 삭제해도 본인 의도
+          backupOk = true;
         }
       } else {
         setMsg('추가할 새 데이터가 없습니다.');
       }
-      return report;
+      return { report, backupOk };
     } catch (err) {
       setMsg('실패: ' + (err as Error).message);
       return null;
@@ -102,14 +113,21 @@ export function DataScreen() {
     }
   };
 
-  const runSync = (ids: string[]) => runSyncInner(ids);
-
   const handleSyncConfirm = async (ids: string[], autoDelete: boolean) => {
     setSyncModalOpen(false);
-    const report = await runSyncInner(ids);
+    const result = await runSyncInner(ids);
+    if (!result) return;
+    const { report, backupOk } = result;
     // Codex-1 fix: 명시적으로 시트에 업로드된 세션(report.successIds)만 삭제.
-    // 이전: failures에 없으면 모두 삭제 → preflight 실패(message 반환) 시 모든 선택 세션이 미업로드 상태로 삭제됨.
-    if (autoDelete && report && report.ok > 0 && report.successIds.length > 0) {
+    // Codex 재검증 HIGH-2: 자동 백업이 실패한 경우 autoDelete를 차단 (백업 실패 시 로컬 보존).
+    if (autoDelete && report.ok > 0 && report.successIds.length > 0) {
+      if (!backupOk) {
+        setMsg((m) =>
+          (m ? `${m} · ` : '') +
+          `자동 삭제 보류: 로그 백업이 실패하여 ${report.successIds.length}개 세션을 로컬에 유지합니다.`,
+        );
+        return;
+      }
       const successIds = report.successIds;
       for (const id of successIds) {
         try { await dbDeleteSession(id); } catch { /* ignore */ }

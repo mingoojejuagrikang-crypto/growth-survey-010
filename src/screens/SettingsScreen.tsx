@@ -980,6 +980,41 @@ export function SettingsScreen() {
             <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
               비닐하우스·기계 소음 환경에서 음성 인식 정확도를 높입니다 (낮은 신뢰도 결과 거부).
             </div>
+
+            {/* 로그 자동 Drive 백업 토글 */}
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 10, marginTop: 8,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+                로그 자동 Drive 백업
+              </div>
+              <button
+                onClick={() => s.set({ autoUploadLogs: !s.autoUploadLogs })}
+                style={{
+                  width: 60, height: 32, borderRadius: 16,
+                  background: s.autoUploadLogs ? T.blue : '#2A2D32',
+                  border: 'none', cursor: 'pointer',
+                  position: 'relative',
+                }}
+                title="시트 추가 성공 시 해당 세션의 로그/음성 클립을 Drive에 자동 업로드"
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 4, left: s.autoUploadLogs ? 32 : 4,
+                    width: 24, height: 24, borderRadius: 12,
+                    background: '#fff',
+                    transition: 'left 150ms ease',
+                  }}
+                />
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
+              시트에 추가된 세션만 백업되며, 음성 클립과 STT 로그가 포함됩니다. 끄면 시트만 업로드합니다.
+            </div>
           </div>
         </div>
 
