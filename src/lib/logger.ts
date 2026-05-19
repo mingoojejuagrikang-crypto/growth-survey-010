@@ -1,4 +1,8 @@
-/** In-memory event logger for voice session diagnostics. */
+/** Event logger for voice session diagnostics.
+ *  In-memory ring buffer for fast access + IDB persistence (v5.2 Codex 4차 MEDIUM)
+ *  so reload-before-sync flows still have diagnostic events available for the auto-uploaded ZIP.
+ */
+import { appendLogEvent } from './db';
 
 export interface LogEntry {
   ts: number;
@@ -48,9 +52,12 @@ export const logger = {
   },
 
   log(entry: Omit<LogEntry, 'ts'>): void {
-    entries.push({ ts: Date.now(), ...entry });
-    // Keep max 2000 entries
+    const full = { ts: Date.now(), ...entry };
+    entries.push(full);
+    // Keep max 2000 entries in memory
     if (entries.length > 2000) entries.splice(0, entries.length - 2000);
+    // Fire-and-forget IDB persistence (failures fall back to memory-only behavior)
+    void appendLogEvent(full as unknown as Parameters<typeof appendLogEvent>[0]);
   },
 
   getAll(): LogEntry[] {

@@ -1,22 +1,30 @@
 import JSZip from 'jszip';
 import { logger } from './logger';
-import { loadAudioClip, loadAllAudioClipKeys } from './db';
+import { loadAudioClip, loadAllAudioClipKeys, loadLogEvents } from './db';
 
 /** Export logs + audio clips as a ZIP.
  *  - `sessionIds` undefined → include ALL events and clips (used by manual LOG button)
  *  - `sessionIds` provided → restrict to those sessions only (used by auto upload after sync)
  *  - Empty array → still produces a device-only ZIP, no events/clips
+ *
+ *  v5.2 Codex 4차 MEDIUM: events는 IDB(영속)에서 우선 조회 — reload 후에도 보존됨.
+ *  IDB 실패 시 in-memory logger.getAll()로 폴백.
  */
 export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
   const zip = new JSZip();
   zip.file('device.json', JSON.stringify(logger.device(), null, 2));
 
   const filterSet = sessionIds ? new Set(sessionIds) : null;
-  const events = logger.getAll().filter((e) => {
-    if (!filterSet) return true;
-    // Without a sessionId tag (e.g. early bootstrap events) → include only when no filter
-    return e.sessionId != null && filterSet.has(e.sessionId);
-  });
+
+  let events: unknown[];
+  try {
+    events = await loadLogEvents(sessionIds);
+  } catch {
+    events = logger.getAll().filter((e) => {
+      if (!filterSet) return true;
+      return e.sessionId != null && filterSet.has(e.sessionId);
+    });
+  }
   zip.file('events.json', JSON.stringify(events, null, 2));
 
   // Include audio clips
@@ -24,7 +32,6 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
     const keys = await loadAllAudioClipKeys();
     for (const key of keys) {
       if (filterSet) {
-        // Clip key format: `${sessionId}:${row}:${colId}` — prefix must match one of the synced IDs
         const sid = key.split(':')[0];
         if (!filterSet.has(sid)) continue;
       }
