@@ -15,6 +15,12 @@ interface SettingsState {
   totalRows: number;
   /** TTS playback rate (0.5 ~ 2.0) */
   ttsRate: number;
+  /** Which auto column's value is used as the session label suffix. null = auto-pick. */
+  sessionLabelColId: string | null;
+  /** Pre-computed session label captured at table generation time. */
+  sessionAutoLabel: string | null;
+  /** Noisy environment mode — raises STT confidence threshold + rejects single-char results. */
+  noisyMode: boolean;
 
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns'>>) => void;
   updateColumn: (id: string, next: Column) => void;
@@ -75,6 +81,9 @@ export const useSettingsStore = create<SettingsState>()(
       tableGenerated: false,
       totalRows: 50,
       ttsRate: 1.05,
+      sessionLabelColId: null,
+      sessionAutoLabel: null,
+      noisyMode: false,
 
       set: (partial) => set(partial),
       updateColumn: (id, next) =>
@@ -115,6 +124,9 @@ export const useSettingsStore = create<SettingsState>()(
           s.columns = (s.columns as unknown[]).map(migrateColumn);
         }
         if (typeof s.ttsRate !== 'number') s.ttsRate = 1.05;
+        if (typeof s.sessionLabelColId !== 'string' && s.sessionLabelColId !== null) s.sessionLabelColId = null;
+        if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
+        if (typeof s.noisyMode !== 'boolean') s.noisyMode = false;
         return s as SettingsState;
       },
     },

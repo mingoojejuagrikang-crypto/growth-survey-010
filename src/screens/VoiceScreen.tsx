@@ -41,7 +41,7 @@ export function VoiceScreen() {
         />
         {labelModal && (
           <SessionLabelDialog
-            defaultLabel={buildAutoLabel(s.columns)}
+            defaultLabel={s.sessionAutoLabel || buildAutoLabel(s.columns)}
             onCancel={() => setLabelModal(false)}
             onConfirm={async (label) => {
               setLabelModal(false);

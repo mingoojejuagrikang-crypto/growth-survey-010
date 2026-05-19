@@ -32,10 +32,8 @@ export function DataScreen() {
   const importDataRef = useRef<{ headers: string[]; rows: string[][] } | null>(null);
 
   const lastSelectedIdsRef = useRef<string[]>([]);
-  const [logMenuOpen, setLogMenuOpen] = useState(false);
 
   const doLogDownload = useCallback(async () => {
-    setLogMenuOpen(false);
     setBusy('로그 압축 중...');
     try {
       const blob = await exportLogZip();
@@ -44,21 +42,6 @@ export function DataScreen() {
       setMsg(`✓ ${filename} 다운로드됨`);
     } catch (err) {
       setMsg('로그 다운로드 실패: ' + (err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, []);
-
-  const doLogUpload = useCallback(async () => {
-    setLogMenuOpen(false);
-    setBusy('Drive에 로그 업로드 중...');
-    try {
-      const blob = await exportLogZip();
-      const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
-      await uploadLogToDrive(blob, filename);
-      setMsg('✓ 로그를 Drive에 업로드했습니다');
-    } catch (err) {
-      setMsg('업로드 실패: ' + (err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -97,6 +80,13 @@ export function DataScreen() {
         setFailureReport(report);
       } else if (report.ok > 0) {
         setMsg(`✓ ${report.rows}행을 시트에 추가했습니다`);
+        // v5.2 Data-1: 시트 추가 성공 시 로그도 자동으로 Drive에 백업
+        try {
+          const blob = await exportLogZip();
+          const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
+          await uploadLogToDrive(blob, filename);
+          setMsg((m) => (m ? `${m} · 로그 Drive 백업됨` : '✓ 로그 Drive 백업됨'));
+        } catch { /* 로그 백업 실패는 시트 추가 성공에 영향 없음 */ }
       } else {
         setMsg('추가할 새 데이터가 없습니다.');
       }
@@ -238,51 +228,19 @@ export function DataScreen() {
         >
           CSV
         </button>
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => setLogMenuOpen((v) => !v)}
-            disabled={busy !== null}
-            style={{
-              height: 52, padding: '0 14px', borderRadius: 14,
-              border: `1px solid ${T.lineStrong}`, background: T.card,
-              color: T.textDim, fontSize: 13, fontWeight: 700,
-              display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
-            }}
-            title="로그 내보내기"
-          >
-            LOG
-          </button>
-          {logMenuOpen && (
-            <div
-              style={{
-                position: 'absolute', right: 0, top: 58, zIndex: 50,
-                background: T.card, border: `1px solid ${T.line}`, borderRadius: 12,
-                padding: '6px 0', minWidth: 160,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-              }}
-              onMouseLeave={() => setLogMenuOpen(false)}
-            >
-              <button
-                onClick={doLogDownload}
-                style={{
-                  width: '100%', padding: '12px 16px', background: 'transparent', border: 'none',
-                  color: T.text, fontSize: 14, fontWeight: 600, textAlign: 'left', cursor: 'pointer',
-                }}
-              >
-                ZIP 다운로드
-              </button>
-              <button
-                onClick={doLogUpload}
-                style={{
-                  width: '100%', padding: '12px 16px', background: 'transparent', border: 'none',
-                  color: T.text, fontSize: 14, fontWeight: 600, textAlign: 'left', cursor: 'pointer',
-                }}
-              >
-                Drive 업로드
-              </button>
-            </div>
-          )}
-        </div>
+        <button
+          onClick={doLogDownload}
+          disabled={busy !== null}
+          style={{
+            height: 52, padding: '0 14px', borderRadius: 14,
+            border: `1px solid ${T.lineStrong}`, background: T.card,
+            color: T.textDim, fontSize: 13, fontWeight: 700,
+            display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
+          }}
+          title="로그 ZIP 다운로드"
+        >
+          LOG
+        </button>
       </div>
 
 
@@ -1063,6 +1021,8 @@ function EditableCell({
 
   const isVoice = col.input === 'voice';
   const hasClip = isVoice && !!audioClipKey;
+  const isDate = col.type === 'date';
+  const inputType = isDate ? 'date' : 'text';
   const inputMode = col.type === 'int' ? 'numeric' : col.type === 'float' ? 'decimal' : 'text';
 
   return (
@@ -1077,8 +1037,9 @@ function EditableCell({
       {editing ? (
         <input
           ref={inputRef}
+          type={inputType}
           value={local}
-          inputMode={inputMode as 'numeric' | 'decimal' | 'text'}
+          inputMode={isDate ? undefined : (inputMode as 'numeric' | 'decimal' | 'text')}
           onChange={(e) => setLocal(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => {

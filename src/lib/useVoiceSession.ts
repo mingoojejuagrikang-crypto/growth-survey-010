@@ -36,11 +36,17 @@ export function useVoiceSession() {
   const say = useCallback(async (text: string, interrupt = true) => {
     if (!text) return;
     const ttsStart = Date.now();
-    await speak(text, { interrupt, rate: getTtsRate() });
+    let startDelayMs: number | null = null;
+    await speak(text, {
+      interrupt,
+      rate: getTtsRate(),
+      onStart: (d) => { startDelayMs = d; },
+    });
     logger.log({
       type: 'tts',
       ttsText: text,
       durationMs: Date.now() - ttsStart,
+      startDelayMs,
       sessionId: sessionIdRef.current,
       row: useSessionStore.getState().activeRow,
     });
@@ -280,7 +286,17 @@ export function useVoiceSession() {
       // mark target row incomplete so it gets re-completed once modified
       sess.markRowIncomplete(targetRow);
     }
-    sess.setReturn(curRow, curIdx);
+    // v5.2 8-2: returnRow 체인 보호 — 칩 이동 중에 수정 명령이 들어온 경우
+    // 기존 returnRow를 덮어쓰지 않고 유지하여 수정 완료 후에도 원래 위치로 복귀
+    const existingReturnRow = sess.returnRow;
+    const existingReturnCol = sess.returnColIdx;
+    if (existingReturnRow != null) {
+      // 칩 이동 흐름 중 — 기존 returnRow 유지
+      sess.setReturn(existingReturnRow, existingReturnCol);
+    } else {
+      // 통상 흐름 — 현재 위치로 복귀
+      sess.setReturn(curRow, curIdx);
+    }
     sess.setActiveRow(targetRow);
     sess.setActiveCol(targetIdx);
     sess.setRowValue(targetRow, target.id, '');
@@ -333,6 +349,8 @@ export function useVoiceSession() {
     sess.setActiveCol(idx);
     sess.setRecognized('');
     cancelTts();
+    // v5.2: bump epoch so in-flight handleFinal's advance() guard aborts
+    epochRef.current++;
     awaitingFieldRef.current = null;
     await announceField(vc[idx]);
   }, [announceField]);
@@ -353,6 +371,8 @@ export function useVoiceSession() {
       sess.setActiveCol(targetCol);
       sess.setRecognized('');
       cancelTts();
+      // v5.2: bump epoch so in-flight handleFinal's advance() guard aborts
+      epochRef.current++;
       awaitingFieldRef.current = null;
       await announceRowDiff(cur, targetRow);
       if (vc[targetCol]) await announceField(vc[targetCol]);
@@ -412,6 +432,12 @@ export function useVoiceSession() {
       return;
     }
 
+    // Input-2: TTS 재생 중에는 값 입력 무시 (명령어는 위에서 이미 처리됨)
+    // SpeechController.ttsMuted 플래그를 사용 — onstart/onend 경계로 더 안정적
+    if (ctrlRef.current?.isTtsMuted()) {
+      return;
+    }
+
     // Log STT event
     lastConfidenceRef.current = confidence;
     logger.log({
@@ -425,8 +451,19 @@ export function useVoiceSession() {
       alts: _alts,
     });
 
+    const noisyMode = useSettingsStore.getState().noisyMode;
+    const minConfidence = noisyMode ? 0.80 : 0.65;
+
+    // Input-3: 소음 환경 모드 — 1글자 이하 결과 거부
+    if (noisyMode && text.replace(/\s/g, '').length <= 1) {
+      recorderRef.current?.startClip();
+      useSessionStore.getState().setRecognized('');
+      await say(`${awaiting.name} 다시 말씀해 주세요.`);
+      return;
+    }
+
     // Low confidence — re-ask
-    if (confidence > 0 && confidence < 0.65) {
+    if (confidence > 0 && confidence < minConfidence) {
       recorderRef.current?.startClip(); // restart clip
       useSessionStore.getState().setRecognized('');
       await say(`잘 못 들었습니다. ${awaiting.name} 다시 말씀해 주세요.`);
@@ -442,17 +479,46 @@ export function useVoiceSession() {
       return;
     }
 
-    // Stop recording and save clip
-    const clipBlob = await recorderRef.current?.stopClip() ?? null;
-    if (clipBlob && clipBlob.size > 1000) {
-      const clipKey = `${sessionIdRef.current}:${awaiting.row}:${awaiting.colId}`;
-      try { await saveAudioClip(clipKey, clipBlob); } catch { /* ignore */ }
-      // Track in memory; persistSession() will merge into session rows
-      pendingClipsRef.current[awaiting.row] = {
-        ...pendingClipsRef.current[awaiting.row],
-        [awaiting.colId]: clipKey,
-      };
-    }
+    // Fix v5.2 8-1: awaiting.row 사용 — 칩 이동/수정 흐름에서 sess.activeRow와 어긋날 수 있음
+    const sess = useSessionStore.getState();
+    sess.setRowValue(awaiting.row, awaiting.colId, parsed);
+    sess.setRecognized(parsed);
+
+    // Additional-2: 에코 TTS를 stopClip() 보다 먼저 발화하여 사용자 체감 지연 감소
+    const echoText = awaiting.isModify
+      ? `정정 ${awaiting.name} ${formatForTts(parsed)}`
+      : formatForTts(parsed);
+    const echoEnqueuedAt = Date.now();
+    speak(echoText, {
+      interrupt: true,
+      rate: getTtsRate(),
+      onStart: (d) => {
+        logger.log({
+          type: 'tts',
+          ttsText: echoText,
+          startDelayMs: d,
+          durationMs: Date.now() - echoEnqueuedAt,
+          sessionId: sessionIdRef.current,
+          row: awaiting.row,
+          extra: 'echo',
+        });
+      },
+    });
+
+    // 클립 저장은 fully fire-and-forget — advance()를 블록하지 않음
+    // stopClip()의 MediaRecorder.onstop 대기 (~30-100ms) + IndexedDB put 모두 백그라운드로
+    const clipKey = `${sessionIdRef.current}:${awaiting.row}:${awaiting.colId}`;
+    const clipAwaitingRow = awaiting.row;
+    const clipAwaitingColId = awaiting.colId;
+    recorderRef.current?.stopClip().then((clipBlob) => {
+      if (!clipBlob || clipBlob.size <= 200) return;
+      void saveAudioClip(clipKey, clipBlob).then(() => {
+        pendingClipsRef.current[clipAwaitingRow] = {
+          ...pendingClipsRef.current[clipAwaitingRow],
+          [clipAwaitingColId]: clipKey,
+        };
+      }).catch(() => { /* ignore IDB errors */ });
+    }).catch(() => { /* ignore stopClip errors */ });
 
     logger.log({
       type: 'value',
@@ -465,15 +531,6 @@ export function useVoiceSession() {
       confidence,
     });
 
-    const sess = useSessionStore.getState();
-    sess.setRowValue(sess.activeRow, awaiting.colId, parsed);
-    sess.setRecognized(parsed);
-    // Fix-D: 에코 TTS를 await 없이 큐잉 → advance()가 즉시 다음 필드 안내를 에코 직후에 큐잉
-    // 결과적으로 "에코. 다음필드." 가 끊김 없이 연속 재생됨
-    const echoText = awaiting.isModify
-      ? `정정 ${awaiting.name} ${formatForTts(parsed)}`
-      : formatForTts(parsed);
-    speak(echoText, { interrupt: true, rate: getTtsRate() });
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
     await advance();

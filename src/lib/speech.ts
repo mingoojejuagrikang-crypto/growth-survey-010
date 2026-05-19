@@ -85,7 +85,9 @@ export class SpeechController {
     this.cb = cb;
   }
 
-  /** Called when TTS utterance starts — aborts active STT to prevent echo */
+  /** Called when TTS utterance starts — marks STT muted but keeps recognition alive
+   *  so command keywords (수정/정정/스킵/종료) can still be detected during playback.
+   *  handleFinal in useVoiceSession ignores non-command results while synth.speaking=true. */
   muteForTts() {
     this.ttsMuted = true;
     // Cancel any pending STT restart from a previous unmuteForTts()
@@ -93,13 +95,16 @@ export class SpeechController {
       window.clearTimeout(this.restartingTimer);
       this.restartingTimer = null;
     }
-    try { this.rec?.abort(); } catch { /* ignore */ }
   }
 
-  /** Called when TTS utterance ends — resumes STT after short delay to clear echo */
+  /** Called when TTS utterance ends — STT was never aborted so no restart needed */
   unmuteForTts() {
     this.ttsMuted = false;
-    this.scheduleRestart(150);
+  }
+
+  /** True while TTS is actively playing — used by handleFinal to filter value inputs. */
+  isTtsMuted(): boolean {
+    return this.ttsMuted;
   }
 
   start() {
@@ -162,11 +167,12 @@ export class SpeechController {
   }
 
   private scheduleRestart(delay = 100) {
-    if (this.ttsMuted) return;  // TTS 재생 중에는 재시작 안 함
+    // v5.2: STT must keep running during TTS so command keywords still work.
+    // ttsMuted is no longer a guard here — handleFinal filters non-command results during TTS.
     if (this.restartingTimer !== null) return;
     this.restartingTimer = window.setTimeout(() => {
       this.restartingTimer = null;
-      if (!this.active || this.ttsMuted) return;
+      if (!this.active) return;
       try {
         this.rec = createRecognition();
         if (this.rec) {
@@ -208,12 +214,15 @@ export interface SpeakOptions {
   volume?: number;
   /** Cancel any currently-speaking utterance before starting */
   interrupt?: boolean;
+  /** Called when the TTS engine actually starts playback. Receives delay in ms from enqueue → start. */
+  onStart?: (startDelayMs: number) => void;
 }
 
 /** Speak text. Returns a Promise that resolves when finished. */
 export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
   if (!synth) return Promise.resolve();
   if (opts.interrupt) synth.cancel();
+  const enqueuedAt = Date.now();
   return new Promise((resolve) => {
     const u = new SpeechSynthesisUtterance(text);
     const v = pickKoreanVoice();
@@ -222,7 +231,10 @@ export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
     u.rate = opts.rate ?? 1.05;
     u.pitch = opts.pitch ?? 1;
     u.volume = opts.volume ?? 1;
-    u.onstart = () => { _activeController?.muteForTts(); };
+    u.onstart = () => {
+      opts.onStart?.(Date.now() - enqueuedAt);
+      _activeController?.muteForTts();
+    };
     u.onend = () => { _activeController?.unmuteForTts(); resolve(); };
     u.onerror = () => { _activeController?.unmuteForTts(); resolve(); };
     synth.speak(u);

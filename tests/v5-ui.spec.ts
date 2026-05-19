@@ -202,23 +202,16 @@ test('[데이터] 선택모드 버튼 제거됨 (S1-H)', async ({ page }) => {
   console.log('✓ 데이터 탭 액션 버튼 (시트에 추가/CSV/LOG) 표시 확인');
 });
 
-// ─── 7. 데이터 탭: LOG 드롭다운 (S2-G) ──────────────────────────────
-test('[데이터] LOG 드롭다운 동작 (S2-G)', async ({ page }) => {
+// ─── 7. 데이터 탭: LOG 단일 버튼 (v5.2 — Drive 업로드는 시트 추가 시 자동) ──────────
+test('[데이터] LOG 단일 다운로드 버튼 (v5.2)', async ({ page }) => {
   await goToData(page);
 
   const logBtn = page.locator('text=LOG').first();
   await expect(logBtn).toBeVisible();
-  await logBtn.click();
-  await page.waitForTimeout(300);
 
-  // 드롭다운 메뉴 표시
-  await expect(page.locator('text=ZIP 다운로드')).toBeVisible();
-  await expect(page.locator('text=Drive 업로드')).toBeVisible();
-  console.log('✓ LOG 드롭다운: ZIP 다운로드 / Drive 업로드 메뉴 표시 확인');
-
-  // 외부 클릭으로 닫기 (mouseleave)
-  await page.mouse.move(0, 0);
-  await page.waitForTimeout(200);
+  // v5.2: 드롭다운 제거 — LOG 클릭 즉시 ZIP 다운로드 (드롭다운 메뉴 없음)
+  await expect(page.locator('text=Drive 업로드')).not.toBeVisible();
+  console.log('✓ LOG 버튼: 단일 다운로드 (Drive 업로드는 시트 추가 시 자동)');
 });
 
 // ─── 8. 데이터 탭: 동기화 모달 + autoDelete (S1-J) ──────────────────

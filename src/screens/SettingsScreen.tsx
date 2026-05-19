@@ -622,7 +622,26 @@ export function SettingsScreen() {
       return;
     }
     const total = computeTotalRows(s.columns);
-    s.set({ tableGenerated: true, totalRows: total });
+    // Compute session label: 생성일 + 선택된 컬럼 값 (또는 자동 선택된 첫 fixed-value auto 컬럼)
+    const today = new Date();
+    const dateStr = `${today.getMonth() + 1}월 ${today.getDate()}일`;
+    let colVal = '';
+    const pickedCol = s.sessionLabelColId
+      ? s.columns.find((c) => c.id === s.sessionLabelColId)
+      : null;
+    const effectiveCol =
+      pickedCol ??
+      s.columns.find(
+        (c) => c.input === 'auto' && c.auto.kind === 'fixed' && c.auto.value && c.auto.value !== '오늘',
+      );
+    if (effectiveCol) {
+      if (effectiveCol.auto.kind === 'fixed') colVal = effectiveCol.auto.value;
+      else if (effectiveCol.auto.kind === 'options' && effectiveCol.auto.selected.length === 1) {
+        colVal = effectiveCol.auto.selected[0];
+      }
+    }
+    const sessionAutoLabel = colVal ? `${colVal} ${dateStr}` : dateStr;
+    s.set({ tableGenerated: true, totalRows: total, sessionAutoLabel });
     setTablePreviewOpen(true);
   };
 
@@ -847,6 +866,123 @@ export function SettingsScreen() {
           </div>
         </div>
 
+        {/* 세션 옵션: 세션명 컬럼 선택 + 소음 환경 모드 */}
+        <div
+          style={{
+            marginTop: 14, padding: '0 16px',
+            display: 'flex', flexDirection: 'column', gap: 10,
+          }}
+        >
+          <div
+            style={{
+              background: T.card, borderRadius: 14, padding: 12,
+              border: `1px solid ${T.line}`,
+              display: 'flex', flexDirection: 'column', gap: 10,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 10,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+                세션명 컬럼
+              </div>
+              <select
+                value={s.sessionLabelColId ?? ''}
+                onChange={(e) => {
+                  const newColId = e.target.value || null;
+                  // 컬럼 변경 시 미리보기도 즉시 재계산 (테이블 재생성 없이도 반영)
+                  const today = new Date();
+                  const dateStr = `${today.getMonth() + 1}월 ${today.getDate()}일`;
+                  let colVal = '';
+                  const pickedCol = newColId
+                    ? s.columns.find((c) => c.id === newColId)
+                    : null;
+                  const effectiveCol =
+                    pickedCol ??
+                    s.columns.find(
+                      (c) =>
+                        c.input === 'auto' &&
+                        c.auto.kind === 'fixed' &&
+                        c.auto.value &&
+                        c.auto.value !== '오늘',
+                    );
+                  if (effectiveCol) {
+                    if (effectiveCol.auto.kind === 'fixed') colVal = effectiveCol.auto.value;
+                    else if (effectiveCol.auto.kind === 'options' && effectiveCol.auto.selected.length === 1) {
+                      colVal = effectiveCol.auto.selected[0];
+                    }
+                  }
+                  s.set({
+                    sessionLabelColId: newColId,
+                    sessionAutoLabel: colVal ? `${colVal} ${dateStr}` : dateStr,
+                  });
+                }}
+                style={{
+                  flex: 1, maxWidth: 200, height: 36, borderRadius: 8,
+                  background: T.inputBg, border: `1px solid ${T.line}`,
+                  color: T.text, fontSize: 14, fontWeight: 600,
+                  padding: '0 8px', outline: 'none',
+                }}
+              >
+                <option value="">(자동 선택)</option>
+                {s.columns
+                  .filter(
+                    (c) =>
+                      c.input === 'auto' &&
+                      ((c.auto.kind === 'fixed' && c.auto.value && c.auto.value !== '오늘') ||
+                        (c.auto.kind === 'options' && c.auto.selected.length >= 1)),
+                  )
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            {s.sessionAutoLabel && (
+              <div style={{ fontSize: 12, color: T.textMute }}>
+                세션명 미리보기: <span style={{ color: T.text, fontWeight: 700 }}>{s.sessionAutoLabel}</span>
+              </div>
+            )}
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 10, marginTop: 2,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+                소음 환경 모드
+              </div>
+              <button
+                onClick={() => s.set({ noisyMode: !s.noisyMode })}
+                style={{
+                  width: 60, height: 32, borderRadius: 16,
+                  background: s.noisyMode ? T.blue : '#2A2D32',
+                  border: 'none', cursor: 'pointer',
+                  position: 'relative',
+                }}
+                title="음성 인식 임계값을 높이고 1자 결과를 거부합니다"
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 4, left: s.noisyMode ? 32 : 4,
+                    width: 24, height: 24, borderRadius: 12,
+                    background: '#fff',
+                    transition: 'left 150ms ease',
+                  }}
+                />
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
+              비닐하우스·기계 소음 환경에서 음성 인식 정확도를 높입니다 (낮은 신뢰도 결과 거부).
+            </div>
+          </div>
+        </div>
+
         {/* Footer: version + build date */}
         <div
           style={{
@@ -857,7 +993,8 @@ export function SettingsScreen() {
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
           }}
         >
-          growth-survey-010 · v{__APP_VERSION__} · {__BUILD_DATE__}
+          <div>growth-survey-010 · v{__APP_VERSION__} · {__BUILD_DATE__}</div>
+          <div style={{ marginTop: 4 }}>mingoo.jejuagri.kang@gmail.com</div>
         </div>
       </div>
 

@@ -14,6 +14,8 @@ export interface LogEntry {
   parsed?: string;
   command?: string;
   durationMs?: number;
+  /** TTS engine cold-start latency (enqueue → audio onstart). v5.2 Additional-2. */
+  startDelayMs?: number | null;
   extra?: string;
 }
 
