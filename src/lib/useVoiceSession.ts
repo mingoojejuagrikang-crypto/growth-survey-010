@@ -6,7 +6,7 @@ import { parseKoreanNumber, detectCommand, extractModifyValue } from './koreanNu
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
-import { saveSession, saveAudioClip } from './db';
+import { saveSession, saveAudioClip, deleteAudioClip } from './db';
 import { AudioRecorder } from './audioRecorder';
 import { logger } from './logger';
 
@@ -266,9 +266,35 @@ export function useVoiceSession() {
       const parsed = parseValueForCol(target, preExtractedValue);
       if (parsed !== null) {
         sess.setRowValue(targetRow, target.id, parsed);
-        // If we modified an earlier row, make sure it's still complete
-        if (targetRow < curRow) {
-          // Persist updated row
+        // Codex 5차 MEDIUM: Direct modify는 새 클립을 녹음하지 않으므로,
+        // 이전 (잘못 인식된) 클립을 제거하여 corrected value에 stale audio가 매칭되지 않도록 함.
+        // (1) pendingClipsRef에서 제거
+        const pendingMap = pendingClipsRef.current[targetRow];
+        if (pendingMap && pendingMap[target.id]) {
+          const stalePendingKey = pendingMap[target.id];
+          delete pendingMap[target.id];
+          void deleteAudioClip(stalePendingKey).catch(() => {});
+        }
+        // (2) 이미 persistSession으로 dataStore에 들어간 경우 — 해당 row의 audioClips 정리
+        const existing = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+        const existingRow = existing?.rows.find((r) => r.index === targetRow);
+        if (existing && existingRow?.audioClips?.[target.id]) {
+          const staleExistingKey = existingRow.audioClips[target.id];
+          void deleteAudioClip(staleExistingKey).catch(() => {});
+          const { [target.id]: _removed, ...restClips } = existingRow.audioClips;
+          const updatedRow = {
+            ...existingRow,
+            values: { ...existingRow.values, [target.id]: parsed },
+            audioClips: Object.keys(restClips).length > 0 ? restClips : undefined,
+          };
+          const updatedSession = {
+            ...existing,
+            rows: existing.rows.map((r) => (r.index === targetRow ? updatedRow : r)),
+          };
+          useDataStore.getState().upsertSession(updatedSession);
+          void saveSession(updatedSession).catch(() => {});
+        } else if (targetRow < curRow) {
+          // If we modified an earlier row, make sure it's still complete
           void persistSession();
         }
         sess.setRecognized(parsed);

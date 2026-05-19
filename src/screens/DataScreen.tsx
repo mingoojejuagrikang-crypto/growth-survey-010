@@ -74,6 +74,7 @@ export function DataScreen() {
     let backupOk = false;
     try {
       const report = await syncSelected(ids);
+      // 1) 시트 추가 결과 메시지
       if (report.message) {
         setMsg(report.message);
       } else if (report.failed > 0) {
@@ -81,10 +82,16 @@ export function DataScreen() {
         setFailureReport(report);
       } else if (report.ok > 0) {
         setMsg(`✓ ${report.rows}행을 시트에 추가했습니다`);
-        // v5.2 Data-1 (Codex-2 수정): 시트에 실제 업로드된 세션의 로그/클립만 Drive에 백업.
-        // Codex 재검증 HIGH-1: 설정 토글 (autoUploadLogs)로 사용자가 비활성화 가능.
-        const settings = useSettingsStore.getState();
-        if (settings.autoUploadLogs && report.successIds.length > 0) {
+      } else {
+        setMsg('추가할 새 데이터가 없습니다.');
+      }
+
+      // 2) 로그 백업: failed 분기와 독립적으로 처리.
+      // Codex 5차 HIGH: 부분 성공(ok>0 && failed>0) 시 successIds의 로그도 반드시 백업되어야 함.
+      // 이 세션들은 syncedRows가 업데이트되어 retry 대상이 아니므로 여기서 백업 안 하면 영구 누락.
+      const settings = useSettingsStore.getState();
+      if (settings.autoUploadLogs) {
+        if (report.successIds.length > 0) {
           try {
             const blob = await exportLogZip(report.successIds);
             const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
@@ -92,17 +99,15 @@ export function DataScreen() {
             backupOk = true;
             setMsg((m) => (m ? `${m} · 로그 Drive 백업됨` : '✓ 로그 Drive 백업됨'));
           } catch (err) {
-            // Codex 재검증 HIGH-2: 백업 실패를 명시적으로 표시 (autoDelete 차단 조건이 됨).
+            // Codex 재검증 HIGH-2: 백업 실패는 명시적으로 표시 (autoDelete 차단 조건).
             setMsg((m) => (m ? `${m} · ⚠️ 로그 백업 실패` : '⚠️ 시트 추가 OK, 로그 백업 실패'));
             console.warn('Drive 로그 업로드 실패', err);
           }
-        } else if (!settings.autoUploadLogs) {
-          // 토글 비활성 — 백업 시도 자체를 안 했으므로 "backupOk = true"로 간주 (autoDelete 허용)
-          // 사용자가 자발적으로 백업 OFF 한 상태에서는 로컬에서 삭제해도 본인 의도
-          backupOk = true;
         }
+        // ok == 0 (전부 실패 또는 preflight) → 백업 대상 없음, backupOk는 false로 유지 (어차피 autoDelete 차단됨)
       } else {
-        setMsg('추가할 새 데이터가 없습니다.');
+        // 토글 OFF — 사용자가 자발적으로 백업을 꺼둔 상태에서는 autoDelete 허용
+        backupOk = true;
       }
       return { report, backupOk };
     } catch (err) {
