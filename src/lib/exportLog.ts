@@ -2,20 +2,32 @@ import JSZip from 'jszip';
 import { logger } from './logger';
 import { loadAudioClip, loadAllAudioClipKeys } from './db';
 
-export async function exportLogZip(sessionId?: string): Promise<Blob> {
+/** Export logs + audio clips as a ZIP.
+ *  - `sessionIds` undefined → include ALL events and clips (used by manual LOG button)
+ *  - `sessionIds` provided → restrict to those sessions only (used by auto upload after sync)
+ *  - Empty array → still produces a device-only ZIP, no events/clips
+ */
+export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
   const zip = new JSZip();
   zip.file('device.json', JSON.stringify(logger.device(), null, 2));
 
-  const events = logger.getAll().filter((e) =>
-    !sessionId || e.sessionId === sessionId || !e.sessionId,
-  );
+  const filterSet = sessionIds ? new Set(sessionIds) : null;
+  const events = logger.getAll().filter((e) => {
+    if (!filterSet) return true;
+    // Without a sessionId tag (e.g. early bootstrap events) → include only when no filter
+    return e.sessionId != null && filterSet.has(e.sessionId);
+  });
   zip.file('events.json', JSON.stringify(events, null, 2));
 
   // Include audio clips
   try {
     const keys = await loadAllAudioClipKeys();
     for (const key of keys) {
-      if (sessionId && !key.startsWith(sessionId)) continue;
+      if (filterSet) {
+        // Clip key format: `${sessionId}:${row}:${colId}` — prefix must match one of the synced IDs
+        const sid = key.split(':')[0];
+        if (!filterSet.has(sid)) continue;
+      }
       const blob = await loadAudioClip(key);
       if (blob) {
         const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';

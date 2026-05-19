@@ -18,6 +18,8 @@ export interface SyncReport {
   rows: number;
   message?: string;
   failures: SyncFailure[];
+  /** Session IDs that were actually appended to the sheet — only these are safe to auto-delete. */
+  successIds: string[];
 }
 
 /**
@@ -27,7 +29,7 @@ export interface SyncReport {
 export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
   const settings = useSettingsStore.getState();
   const data = useDataStore.getState();
-  const report: SyncReport = { ok: 0, failed: 0, rows: 0, failures: [] };
+  const report: SyncReport = { ok: 0, failed: 0, rows: 0, failures: [], successIds: [] };
 
   if (sessionIds.length === 0) {
     report.message = '선택된 세션이 없습니다.';
@@ -69,6 +71,7 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
       await saveSession(updated);
       report.ok++;
       report.rows += pending.length;
+      report.successIds.push(session.id);
     } catch (err) {
       report.failed++;
       report.failures.push({

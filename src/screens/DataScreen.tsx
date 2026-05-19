@@ -80,13 +80,16 @@ export function DataScreen() {
         setFailureReport(report);
       } else if (report.ok > 0) {
         setMsg(`✓ ${report.rows}행을 시트에 추가했습니다`);
-        // v5.2 Data-1: 시트 추가 성공 시 로그도 자동으로 Drive에 백업
-        try {
-          const blob = await exportLogZip();
-          const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
-          await uploadLogToDrive(blob, filename);
-          setMsg((m) => (m ? `${m} · 로그 Drive 백업됨` : '✓ 로그 Drive 백업됨'));
-        } catch { /* 로그 백업 실패는 시트 추가 성공에 영향 없음 */ }
+        // v5.2 Data-1 (Codex-2 수정): 시트에 실제 업로드된 세션의 로그/클립만 Drive에 백업.
+        // 이전 구현은 IndexedDB의 모든 클립과 이벤트를 무차별 전송하여 미동의 데이터 유출 위험.
+        if (report.successIds.length > 0) {
+          try {
+            const blob = await exportLogZip(report.successIds);
+            const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
+            await uploadLogToDrive(blob, filename);
+            setMsg((m) => (m ? `${m} · 로그 Drive 백업됨` : '✓ 로그 Drive 백업됨'));
+          } catch { /* 로그 백업 실패는 시트 추가 성공에 영향 없음 */ }
+        }
       } else {
         setMsg('추가할 새 데이터가 없습니다.');
       }
@@ -104,13 +107,15 @@ export function DataScreen() {
   const handleSyncConfirm = async (ids: string[], autoDelete: boolean) => {
     setSyncModalOpen(false);
     const report = await runSyncInner(ids);
-    if (autoDelete && report) {
-      const successIds = ids.filter((id) => !report.failures.find((f) => f.sessionId === id));
+    // Codex-1 fix: 명시적으로 시트에 업로드된 세션(report.successIds)만 삭제.
+    // 이전: failures에 없으면 모두 삭제 → preflight 실패(message 반환) 시 모든 선택 세션이 미업로드 상태로 삭제됨.
+    if (autoDelete && report && report.ok > 0 && report.successIds.length > 0) {
+      const successIds = report.successIds;
       for (const id of successIds) {
         try { await dbDeleteSession(id); } catch { /* ignore */ }
         removeSession(id);
       }
-      if (successIds.length > 0) setMsg((m) => (m ? m + ` · ${successIds.length}개 세션 삭제됨` : `✓ ${successIds.length}개 세션 삭제됨`));
+      setMsg((m) => (m ? m + ` · ${successIds.length}개 세션 삭제됨` : `✓ ${successIds.length}개 세션 삭제됨`));
     }
   };
 

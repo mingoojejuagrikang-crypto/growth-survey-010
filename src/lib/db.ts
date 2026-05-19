@@ -36,9 +36,21 @@ export async function loadAllSessions(): Promise<Session[]> {
   return all;
 }
 
+/** Delete session row and cascade-delete its audio clips.
+ *  Clip keys follow `${sessionId}:${row}:${colId}` so prefix match is safe. */
 export async function deleteSession(id: string): Promise<void> {
   const db = await getDb();
-  await db.delete('sessions', id);
+  const tx = db.transaction(['sessions', 'audioClips'], 'readwrite');
+  await tx.objectStore('sessions').delete(id);
+  const clipsStore = tx.objectStore('audioClips');
+  const allKeys = (await clipsStore.getAllKeys()) as string[];
+  const prefix = `${id}:`;
+  for (const key of allKeys) {
+    if (typeof key === 'string' && key.startsWith(prefix)) {
+      await clipsStore.delete(key);
+    }
+  }
+  await tx.done;
 }
 
 export async function loadUnsyncedSessions(): Promise<Session[]> {
