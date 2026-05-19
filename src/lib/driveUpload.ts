@@ -1,6 +1,12 @@
 import { getAccessToken } from './googleAuth';
 
-const LOG_FOLDER_ID = '123Qag3EJK2R4imt0vfeZwvJyvQ3yL-lw';
+/**
+ * Drive log backup target.
+ * Single-user / single-tenant deployment: this folder is owned by the project user
+ * (mingoo.jejuagri.kang@gmail.com) and accessible only with their OAuth token.
+ * Future multi-tenant work should make this user-configurable.
+ */
+export const LOG_FOLDER_ID = '123Qag3EJK2R4imt0vfeZwvJyvQ3yL-lw';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
 
 export async function uploadLogToDrive(zipBlob: Blob, filename: string): Promise<string> {

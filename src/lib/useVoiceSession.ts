@@ -604,16 +604,21 @@ export function useVoiceSession() {
     ctrlRef.current = null;
     cancelTts();
     awaitingFieldRef.current = null;
-    recorderRef.current?.dispose();
-    recorderRef.current = null;
     logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'stop' });
     if (announce) await say('입력을 종료합니다.');
     useSessionStore.getState().setPhase('ready');
-    // Codex 재검증 MEDIUM: 마지막 행의 클립 저장이 완료될 때까지 대기 후 persistSession.
-    // dispose()가 MediaRecorder.stop()을 호출 → onstop 이벤트 → 대기 중인 stopClip Promise 해소.
+    // Codex 3차 HIGH: 클립 저장을 dispose보다 먼저 flush.
+    // dispose는 in-flight stopClip의 resolveStop을 null로 해소하지만(zombie 방지),
+    // 가능하면 자연 onstop으로 실제 blob을 저장하는 것이 우선.
     if (pendingClipSavesRef.current.size > 0) {
-      await Promise.allSettled(Array.from(pendingClipSavesRef.current));
+      // 5초 안전 타임아웃: dispose가 즉시 해소하므로 일반적으로 즉시 끝나지만 race 대비.
+      await Promise.race([
+        Promise.allSettled(Array.from(pendingClipSavesRef.current)),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+      ]);
     }
+    recorderRef.current?.dispose();
+    recorderRef.current = null;
     void persistSession();
   }, [persistSession, say]);
 

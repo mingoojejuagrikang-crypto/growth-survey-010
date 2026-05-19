@@ -23,6 +23,7 @@ import { computeTotalRows, nestedAutoValue, buildCyclingValues } from '../lib/au
 import { speak } from '../lib/speech';
 import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
+import { LOG_FOLDER_ID } from '../lib/driveUpload';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
@@ -1015,6 +1016,20 @@ export function SettingsScreen() {
             <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
               시트에 추가된 세션만 백업되며, 음성 클립과 STT 로그가 포함됩니다. 끄면 시트만 업로드합니다.
             </div>
+            {s.autoUploadLogs && (
+              <div
+                style={{
+                  fontSize: 11, color: T.textMute, lineHeight: 1.5,
+                  background: 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${T.line}`,
+                  borderRadius: 8, padding: '6px 10px',
+                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                }}
+              >
+                <div style={{ color: T.textDim, fontSize: 10 }}>업로드 대상 (Google Drive 폴더):</div>
+                <div style={{ wordBreak: 'break-all', marginTop: 2 }}>{LOG_FOLDER_ID}</div>
+              </div>
+            )}
           </div>
         </div>
 
