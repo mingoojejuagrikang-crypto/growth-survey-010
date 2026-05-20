@@ -117,9 +117,15 @@ export function DataScreen() {
     const result = await runSyncInner(ids);
     if (!result) return;
     const { report, backupOk } = result;
-    // 시트 업로드 성공한 세션만 삭제. 로그 백업 실패는 경고만(runSyncInner에서 이미 표시)하고 삭제는 허용.
+    // 시트 업로드 성공한 세션 자동 삭제. 로그 백업 실패 시 데이터 유실 방지를 위해 삭제 보류.
     if (autoDelete && report.ok > 0 && report.successIds.length > 0) {
-      void backupOk; // best-effort — failure already warned in runSyncInner
+      if (!backupOk) {
+        setMsg((m) =>
+          (m ? `${m} · ` : '') +
+          `자동 삭제 보류: 로그 백업 실패로 ${report.successIds.length}개 세션을 로컬에 유지합니다.`,
+        );
+        return;
+      }
       const successIds = report.successIds;
       for (const id of successIds) {
         try { await dbDeleteSession(id); } catch { /* ignore */ }
