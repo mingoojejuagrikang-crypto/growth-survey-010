@@ -339,25 +339,32 @@ export function useVoiceSession() {
         void deleteAudioClip(staleKey).catch(() => {});
       }
     }
-    // Update dataStore to remove audio clips for cleared columns
+    // Update dataStore: clear values + audioClips for cascaded columns and mark row incomplete.
     const existingSession = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
     const existingRow = existingSession?.rows.find((r) => r.index === targetRow);
-    if (existingSession && existingRow?.audioClips) {
+    if (existingSession && existingRow) {
       const clearedIds = new Set(vc.slice(targetIdx).map((c) => c.id));
-      const newClips = Object.fromEntries(
-        Object.entries(existingRow.audioClips).filter(([k]) => !clearedIds.has(k)),
-      );
-      // Also delete stale IDB clips
-      for (const [colId, key] of Object.entries(existingRow.audioClips)) {
-        if (clearedIds.has(colId)) void deleteAudioClip(key as string).catch(() => {});
+      // Clear audio clips for cascaded columns
+      if (existingRow.audioClips) {
+        const newClips = Object.fromEntries(
+          Object.entries(existingRow.audioClips).filter(([k]) => !clearedIds.has(k)),
+        );
+        for (const [colId, key] of Object.entries(existingRow.audioClips)) {
+          if (clearedIds.has(colId)) void deleteAudioClip(key as string).catch(() => {});
+        }
+        existingRow.audioClips = Object.keys(newClips).length > 0 ? newClips : undefined;
       }
-      const updatedRow = {
-        ...existingRow,
-        audioClips: Object.keys(newClips).length > 0 ? newClips : undefined,
-      };
+      // Clear values for cascaded columns and mark row incomplete
+      const newValues = Object.fromEntries(
+        Object.entries(existingRow.values).filter(([k]) => !clearedIds.has(k)),
+      );
+      const updatedRow = { ...existingRow, values: newValues, complete: false };
+      const updatedRows = existingSession.rows.map((r) => (r.index === targetRow ? updatedRow : r));
       const updatedSession = {
         ...existingSession,
-        rows: existingSession.rows.map((r) => (r.index === targetRow ? updatedRow : r)),
+        rows: updatedRows,
+        completedRows: updatedRows.filter((r) => r.complete).length,
+        syncedRows: Math.min(existingSession.syncedRows, targetRow - 1),
       };
       useDataStore.getState().upsertSession(updatedSession);
       void saveSession(updatedSession).catch(() => {});
@@ -518,11 +525,15 @@ export function useVoiceSession() {
       alts,
     });
 
-    // Item 12: 컬럼명 완전 일치 STT 거부
-    const colNames = useSettingsStore.getState().columns.map((c) => c.name.trim());
-    if (colNames.includes(text.trim())) {
-      logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
-      return;
+    // Item 12: 컬럼명 완전 일치 STT 거부 — 숫자/날짜 컬럼에만 적용 (text/options 컬럼은 컬럼명이 유효한 값일 수 있음)
+    const allColumns = useSettingsStore.getState().columns;
+    const currentCol = allColumns.find((c) => c.id === awaiting.colId);
+    if (currentCol && currentCol.type !== 'text' && currentCol.type !== 'options') {
+      const colNames = allColumns.map((c) => c.name.trim());
+      if (colNames.includes(text.trim())) {
+        logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        return;
+      }
     }
 
     const noisyMode = useSettingsStore.getState().noisyMode;

@@ -117,16 +117,9 @@ export function DataScreen() {
     const result = await runSyncInner(ids);
     if (!result) return;
     const { report, backupOk } = result;
-    // Codex-1 fix: 명시적으로 시트에 업로드된 세션(report.successIds)만 삭제.
-    // Codex 재검증 HIGH-2: 자동 백업이 실패한 경우 autoDelete를 차단 (백업 실패 시 로컬 보존).
+    // 시트 업로드 성공한 세션만 삭제. 로그 백업 실패는 경고만(runSyncInner에서 이미 표시)하고 삭제는 허용.
     if (autoDelete && report.ok > 0 && report.successIds.length > 0) {
-      if (!backupOk) {
-        setMsg((m) =>
-          (m ? `${m} · ` : '') +
-          `자동 삭제 보류: 로그 백업이 실패하여 ${report.successIds.length}개 세션을 로컬에 유지합니다.`,
-        );
-        return;
-      }
+      void backupOk; // best-effort — failure already warned in runSyncInner
       const successIds = report.successIds;
       for (const id of successIds) {
         try { await dbDeleteSession(id); } catch { /* ignore */ }
