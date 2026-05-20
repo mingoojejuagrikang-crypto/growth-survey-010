@@ -339,10 +339,27 @@ export function useVoiceSession() {
       }
     }
 
-    // Snapshot the existing persisted row before clearing in-memory.
-    // persistSession() includes this backup if stop() fires before re-completion.
-    const existingForBackup = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
-    correctionBackupRef.current = existingForBackup?.rows.find((r) => r.index === targetRow) ?? null;
+    // Snapshot the existing row before clearing in-memory. persistSession() includes this backup
+    // if stop() fires before re-completion. If persistSession fire-and-forget hasn't flushed yet
+    // (row in sessionStore.completedRows but not yet in useDataStore), build from live store.
+    {
+      const existingForBackup = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+      const persistedRow = existingForBackup?.rows.find((r) => r.index === targetRow);
+      if (persistedRow) {
+        correctionBackupRef.current = persistedRow;
+      } else if (sess.isRowComplete(targetRow)) {
+        const bSettings = useSettingsStore.getState();
+        const bAuto = buildCyclingValues(bSettings.columns, targetRow);
+        const bFixed = autoNonCyclingValues(bSettings.columns, targetRow);
+        correctionBackupRef.current = {
+          index: targetRow,
+          values: { ...bFixed, ...bAuto, ...sess.getRowValues(targetRow) },
+          complete: true,
+        };
+      } else {
+        correctionBackupRef.current = null;
+      }
+    }
 
     // Cascade clear in-memory only: target col through end of row (so user re-records all remaining cols).
     // Persisted IDB/dataStore state is left intact until the row is successfully re-completed and
