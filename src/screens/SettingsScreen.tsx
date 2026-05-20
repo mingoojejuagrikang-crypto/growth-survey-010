@@ -23,7 +23,6 @@ import { computeTotalRows, nestedAutoValue, buildCyclingValues } from '../lib/au
 import { speak } from '../lib/speech';
 import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
-import { LOG_FOLDER_ID } from '../lib/driveUpload';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
@@ -152,6 +151,7 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
         <span style={{ fontSize: 13, color: T.textMute }}>고정값</span>
         <input
+          type={col.type === 'date' ? 'date' : 'text'}
           value={col.auto.kind === 'fixed' ? col.auto.value : ''}
           placeholder={col.type === 'date' ? '오늘' : '값'}
           onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v.target.value } })}
@@ -494,6 +494,7 @@ export function SettingsScreen() {
   const [dropIdx, setDropIdx] = useState<number | null>(null);
   const [confirmedUrl, setConfirmedUrl] = useState<string>(s.sheetUrl);
   const [tablePreviewOpen, setTablePreviewOpen] = useState(false);
+  const [showUrlInput, setShowUrlInput] = useState(false);
   const googleConfigured = isGoogleConfigured();
   const previewRowCount = computeTotalRows(s.columns);
   const pickerAvailable = s.googleConnected && !!getPickerApiKey();
@@ -623,9 +624,8 @@ export function SettingsScreen() {
       return;
     }
     const total = computeTotalRows(s.columns);
-    // Compute session label: 생성일 + 선택된 컬럼 값 (또는 자동 선택된 첫 fixed-value auto 컬럼)
-    const today = new Date();
-    const dateStr = `${today.getMonth() + 1}월 ${today.getDate()}일`;
+    // Compute session label: ISO 날짜 + 선택된 컬럼 값 (date 타입 컬럼은 중복이므로 제외)
+    const isoDate = new Date().toISOString().slice(0, 10);
     let colVal = '';
     const pickedCol = s.sessionLabelColId
       ? s.columns.find((c) => c.id === s.sessionLabelColId)
@@ -633,7 +633,12 @@ export function SettingsScreen() {
     const effectiveCol =
       pickedCol ??
       s.columns.find(
-        (c) => c.input === 'auto' && c.auto.kind === 'fixed' && c.auto.value && c.auto.value !== '오늘',
+        (c) =>
+          c.input === 'auto' &&
+          c.type !== 'date' &&
+          c.auto.kind === 'fixed' &&
+          c.auto.value &&
+          c.auto.value !== '오늘',
       );
     if (effectiveCol) {
       if (effectiveCol.auto.kind === 'fixed') colVal = effectiveCol.auto.value;
@@ -641,7 +646,7 @@ export function SettingsScreen() {
         colVal = effectiveCol.auto.selected[0];
       }
     }
-    const sessionAutoLabel = colVal ? `${colVal} ${dateStr}` : dateStr;
+    const sessionAutoLabel = colVal ? `${isoDate} ${colVal}` : isoDate;
     s.set({ tableGenerated: true, totalRows: total, sessionAutoLabel });
     setTablePreviewOpen(true);
   };
@@ -704,68 +709,144 @@ export function SettingsScreen() {
               {s.googleConnected && I.check(20, T.green)}
             </button>
 
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div
-                style={{
-                  flex: 1,
-                  height: 52, borderRadius: 12,
-                  background: T.inputBg, border: `1px solid ${T.line}`,
-                  display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px',
-                  minWidth: 0,
-                }}
-              >
-                <div style={{ color: T.textMute }}>{I.link(18)}</div>
-                <input
-                  value={s.sheetUrl}
-                  onChange={(e) => onUrlTyping(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') onUrlConfirm(); }}
-                  placeholder="스프레드시트 URL 붙여넣기"
-                  style={{
-                    flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                    fontSize: 15, color: T.text, minWidth: 0,
-                  }}
-                />
-              </div>
-              {(() => {
-                const applied = s.sheetUrl.trim() === confirmedUrl.trim() && s.availableSheets.length > 0;
-                const canConfirm = !!s.sheetUrl.trim() && !applied && !loading;
-                return (
-                  <button
-                    onClick={onUrlConfirm}
-                    disabled={!canConfirm && !applied}
-                    style={{
-                      height: 52, padding: '0 16px', borderRadius: 12,
-                      border: 'none',
-                      background: applied ? 'rgba(0,200,83,0.18)' : canConfirm ? T.blue : '#2A2D32',
-                      color: applied ? T.green : canConfirm ? '#fff' : T.textMute,
-                      fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
-                      cursor: canConfirm ? 'pointer' : 'default',
-                      display: 'flex', alignItems: 'center', gap: 6,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {applied ? <>{I.check(16, T.green)} 적용됨</> : '확인'}
-                  </button>
-                );
-              })()}
-              {pickerAvailable && (
+            {pickerAvailable ? (
+              /* Drive Picker를 주 동작으로 승격 */
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <button
                   onClick={onPickerClick}
                   disabled={loading !== null}
-                  title="Drive에서 스프레드시트 선택"
                   style={{
-                    height: 52, padding: '0 14px', borderRadius: 12,
-                    border: `1px solid ${T.lineStrong}`, background: T.card,
-                    color: T.textDim, fontSize: 13, fontWeight: 700,
-                    display: 'flex', alignItems: 'center', gap: 6,
+                    height: 52, borderRadius: 12, border: 'none',
+                    background: T.blue, color: '#fff',
+                    fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                     cursor: loading ? 'wait' : 'pointer',
-                    whiteSpace: 'nowrap', flexShrink: 0,
+                    boxShadow: `0 4px 14px ${T.blueGlow}`,
+                    opacity: loading ? 0.7 : 1,
                   }}
                 >
-                  {I.link(14, T.textDim)} Drive
+                  {I.link(16, '#fff')} Drive에서 시트 선택
                 </button>
-              )}
-            </div>
+                {s.sheetUrl && (
+                  <div
+                    style={{
+                      fontSize: 12, color: T.textMute, padding: '0 4px',
+                      wordBreak: 'break-all', lineHeight: 1.4,
+                    }}
+                  >
+                    {confirmedUrl && s.sheetUrl === confirmedUrl
+                      ? <span style={{ color: T.green }}>{I.check(12, T.green)} 연결됨 · </span>
+                      : null}
+                    <span style={{ fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 11 }}>
+                      {s.sheetUrl.replace(/^https?:\/\//, '').slice(0, 60)}{s.sheetUrl.length > 60 ? '…' : ''}
+                    </span>
+                  </div>
+                )}
+                <button
+                  onClick={() => setShowUrlInput((v) => !v)}
+                  style={{
+                    alignSelf: 'flex-start',
+                    background: 'transparent', border: 'none',
+                    color: T.textMute, fontSize: 12, fontWeight: 600,
+                    cursor: 'pointer', textDecoration: 'underline', padding: 0,
+                  }}
+                >
+                  {showUrlInput ? '▲ URL 직접 입력 숨기기' : '▼ URL 직접 입력'}
+                </button>
+                {showUrlInput && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div
+                      style={{
+                        flex: 1, height: 52, borderRadius: 12,
+                        background: T.inputBg, border: `1px solid ${T.line}`,
+                        display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px',
+                        minWidth: 0,
+                      }}
+                    >
+                      <div style={{ color: T.textMute }}>{I.link(18)}</div>
+                      <input
+                        value={s.sheetUrl}
+                        onChange={(e) => onUrlTyping(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') onUrlConfirm(); }}
+                        placeholder="스프레드시트 URL 붙여넣기"
+                        style={{
+                          flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                          fontSize: 15, color: T.text, minWidth: 0,
+                        }}
+                      />
+                    </div>
+                    {(() => {
+                      const applied = s.sheetUrl.trim() === confirmedUrl.trim() && s.availableSheets.length > 0;
+                      const canConfirm = !!s.sheetUrl.trim() && !applied && !loading;
+                      return (
+                        <button
+                          onClick={onUrlConfirm}
+                          disabled={!canConfirm && !applied}
+                          style={{
+                            height: 52, padding: '0 16px', borderRadius: 12,
+                            border: 'none',
+                            background: applied ? 'rgba(0,200,83,0.18)' : canConfirm ? T.blue : '#2A2D32',
+                            color: applied ? T.green : canConfirm ? '#fff' : T.textMute,
+                            fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
+                            cursor: canConfirm ? 'pointer' : 'default',
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {applied ? <>{I.check(16, T.green)} 적용됨</> : '확인'}
+                        </button>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Picker 미사용 — 기존 URL 입력 방식 */
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div
+                  style={{
+                    flex: 1, height: 52, borderRadius: 12,
+                    background: T.inputBg, border: `1px solid ${T.line}`,
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px',
+                    minWidth: 0,
+                  }}
+                >
+                  <div style={{ color: T.textMute }}>{I.link(18)}</div>
+                  <input
+                    value={s.sheetUrl}
+                    onChange={(e) => onUrlTyping(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') onUrlConfirm(); }}
+                    placeholder="스프레드시트 URL 붙여넣기"
+                    style={{
+                      flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                      fontSize: 15, color: T.text, minWidth: 0,
+                    }}
+                  />
+                </div>
+                {(() => {
+                  const applied = s.sheetUrl.trim() === confirmedUrl.trim() && s.availableSheets.length > 0;
+                  const canConfirm = !!s.sheetUrl.trim() && !applied && !loading;
+                  return (
+                    <button
+                      onClick={onUrlConfirm}
+                      disabled={!canConfirm && !applied}
+                      style={{
+                        height: 52, padding: '0 16px', borderRadius: 12,
+                        border: 'none',
+                        background: applied ? 'rgba(0,200,83,0.18)' : canConfirm ? T.blue : '#2A2D32',
+                        color: applied ? T.green : canConfirm ? '#fff' : T.textMute,
+                        fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
+                        cursor: canConfirm ? 'pointer' : 'default',
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {applied ? <>{I.check(16, T.green)} 적용됨</> : '확인'}
+                    </button>
+                  );
+                })()}
+              </div>
+            )}
 
             {(s.availableSheets.length > 0 || s.sheetUrl) && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -888,15 +969,13 @@ export function SettingsScreen() {
               }}
             >
               <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
-                세션명 컬럼
+                세션명
               </div>
               <select
                 value={s.sessionLabelColId ?? ''}
                 onChange={(e) => {
                   const newColId = e.target.value || null;
-                  // 컬럼 변경 시 미리보기도 즉시 재계산 (테이블 재생성 없이도 반영)
-                  const today = new Date();
-                  const dateStr = `${today.getMonth() + 1}월 ${today.getDate()}일`;
+                  const isoDate = new Date().toISOString().slice(0, 10);
                   let colVal = '';
                   const pickedCol = newColId
                     ? s.columns.find((c) => c.id === newColId)
@@ -906,6 +985,7 @@ export function SettingsScreen() {
                     s.columns.find(
                       (c) =>
                         c.input === 'auto' &&
+                        c.type !== 'date' &&
                         c.auto.kind === 'fixed' &&
                         c.auto.value &&
                         c.auto.value !== '오늘',
@@ -918,7 +998,7 @@ export function SettingsScreen() {
                   }
                   s.set({
                     sessionLabelColId: newColId,
-                    sessionAutoLabel: colVal ? `${colVal} ${dateStr}` : dateStr,
+                    sessionAutoLabel: colVal ? `${isoDate} ${colVal}` : isoDate,
                   });
                 }}
                 style={{
@@ -982,54 +1062,6 @@ export function SettingsScreen() {
               비닐하우스·기계 소음 환경에서 음성 인식 정확도를 높입니다 (낮은 신뢰도 결과 거부).
             </div>
 
-            {/* 로그 자동 Drive 백업 토글 */}
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                gap: 10, marginTop: 8,
-              }}
-            >
-              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
-                로그 자동 Drive 백업
-              </div>
-              <button
-                onClick={() => s.set({ autoUploadLogs: !s.autoUploadLogs })}
-                style={{
-                  width: 60, height: 32, borderRadius: 16,
-                  background: s.autoUploadLogs ? T.blue : '#2A2D32',
-                  border: 'none', cursor: 'pointer',
-                  position: 'relative',
-                }}
-                title="시트 추가 성공 시 해당 세션의 로그/음성 클립을 Drive에 자동 업로드"
-              >
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 4, left: s.autoUploadLogs ? 32 : 4,
-                    width: 24, height: 24, borderRadius: 12,
-                    background: '#fff',
-                    transition: 'left 150ms ease',
-                  }}
-                />
-              </button>
-            </div>
-            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
-              시트에 추가된 세션만 백업되며, 음성 클립과 STT 로그가 포함됩니다. 끄면 시트만 업로드합니다.
-            </div>
-            {s.autoUploadLogs && (
-              <div
-                style={{
-                  fontSize: 11, color: T.textMute, lineHeight: 1.5,
-                  background: 'rgba(255,255,255,0.04)',
-                  border: `1px solid ${T.line}`,
-                  borderRadius: 8, padding: '6px 10px',
-                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                }}
-              >
-                <div style={{ color: T.textDim, fontSize: 10 }}>업로드 대상 (Google Drive 폴더):</div>
-                <div style={{ wordBreak: 'break-all', marginTop: 2 }}>{LOG_FOLDER_ID}</div>
-              </div>
-            )}
           </div>
         </div>
 
@@ -1038,13 +1070,16 @@ export function SettingsScreen() {
           style={{
             marginTop: 18, padding: '12px 16px 8px',
             textAlign: 'center',
-            fontSize: 11, color: T.textMute,
-            letterSpacing: 0.2,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
           }}
         >
-          <div>growth-survey-010 · v{__APP_VERSION__} · {__BUILD_DATE__}</div>
-          <div style={{ marginTop: 4 }}>mingoo.jejuagri.kang@gmail.com</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: T.text }}>
+            v{__APP_VERSION__}{' '}
+            <span style={{ color: T.textMute, fontWeight: 500, fontSize: 12 }}>({__BUILD_DATE__})</span>
+          </div>
+          <div style={{ fontSize: 11, color: T.textMute, marginTop: 4 }}>
+            growth-survey-010 · mingoo.jejuagri.kang@gmail.com
+          </div>
         </div>
       </div>
 

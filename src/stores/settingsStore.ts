@@ -21,8 +21,6 @@ interface SettingsState {
   sessionAutoLabel: string | null;
   /** Noisy environment mode — raises STT confidence threshold + rejects single-char results. */
   noisyMode: boolean;
-  /** When true, "시트에 추가" success auto-uploads log ZIP (events + audio clips of synced sessions) to Drive. */
-  autoUploadLogs: boolean;
 
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns'>>) => void;
   updateColumn: (id: string, next: Column) => void;
@@ -86,9 +84,6 @@ export const useSettingsStore = create<SettingsState>()(
       sessionLabelColId: null,
       sessionAutoLabel: null,
       noisyMode: false,
-      // Codex 3차 CRITICAL: 기본 OFF — 사용자가 설정 화면에서 명시적으로 활성화 후에만 동작.
-      // 활성화 시 폴더 ID(LOG_FOLDER_ID)가 UI에 표시되어 대상이 투명함.
-      autoUploadLogs: false,
 
       set: (partial) => set(partial),
       updateColumn: (id, next) =>
@@ -132,7 +127,6 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.sessionLabelColId !== 'string' && s.sessionLabelColId !== null) s.sessionLabelColId = null;
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
         if (typeof s.noisyMode !== 'boolean') s.noisyMode = false;
-        if (typeof s.autoUploadLogs !== 'boolean') s.autoUploadLogs = false;
         return s as SettingsState;
       },
     },

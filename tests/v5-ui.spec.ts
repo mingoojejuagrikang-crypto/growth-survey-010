@@ -195,23 +195,21 @@ test('[데이터] 선택모드 버튼 제거됨 (S1-H)', async ({ page }) => {
   expect(selectBtnVisible).toBe(false);
   console.log('✓ 선택 버튼 완전 제거 확인');
 
-  // 액션 버튼들 확인
+  // 액션 버튼들 확인 (v5.3: 상단 LOG 버튼 제거됨 — 세션 카드별 LOG로 이동)
   await expect(page.locator('text=시트에 추가')).toBeVisible();
   await expect(page.locator('text=CSV')).toBeVisible();
-  await expect(page.locator('text=LOG')).toBeVisible();
-  console.log('✓ 데이터 탭 액션 버튼 (시트에 추가/CSV/LOG) 표시 확인');
+  console.log('✓ 데이터 탭 액션 버튼 (시트에 추가/CSV) 표시 확인');
 });
 
-// ─── 7. 데이터 탭: LOG 단일 버튼 (v5.2 — Drive 업로드는 시트 추가 시 자동) ──────────
-test('[데이터] LOG 단일 다운로드 버튼 (v5.2)', async ({ page }) => {
+// ─── 7. 데이터 탭: 상단 LOG 버튼 제거됨 (v5.3) ───────────────────────
+test('[데이터] 상단 LOG 버튼 제거 확인 (v5.3)', async ({ page }) => {
   await goToData(page);
 
-  const logBtn = page.locator('text=LOG').first();
-  await expect(logBtn).toBeVisible();
-
-  // v5.2: 드롭다운 제거 — LOG 클릭 즉시 ZIP 다운로드 (드롭다운 메뉴 없음)
+  // v5.3: 상단 전역 LOG 버튼 제거됨 (세션 카드별 개별 다운로드로 변경)
+  // 액션 바에 LOG 버튼이 없어야 함 (세션 없는 상태에서는 세션 카드 자체가 없음)
+  await expect(page.locator('text=시트에 추가')).toBeVisible();
   await expect(page.locator('text=Drive 업로드')).not.toBeVisible();
-  console.log('✓ LOG 버튼: 단일 다운로드 (Drive 업로드는 시트 추가 시 자동)');
+  console.log('✓ 상단 LOG 버튼 제거 + Drive 업로드 버튼 없음 확인 (v5.3)');
 });
 
 // ─── 8. 데이터 탭: 동기화 모달 + autoDelete (S1-J) ──────────────────
@@ -318,20 +316,20 @@ test('[입력] 테이블 생성 후 시작 버튼 활성화', async ({ page }) =
 });
 
 // ─── 11. 설정 탭: 버전 표시 ──────────────────────────────────────────
-test('[설정] 버전 0.6.0 표시', async ({ page }) => {
+test('[설정] 버전 0.7.0 표시', async ({ page }) => {
   await goToSettings(page);
   // 스크롤 맨 아래
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(200);
 
-  const versionText = await page.locator('text=0.6.0').first().isVisible().catch(() => false);
+  const versionText = await page.locator('text=0.7.0').first().isVisible().catch(() => false);
   if (versionText) {
-    console.log('✓ 버전 0.6.0 표시 확인');
+    console.log('✓ 버전 0.7.0 표시 확인');
   } else {
     // might be in a nested div, check with evaluate
     const bodyText = await page.evaluate(() => document.body.innerText);
-    expect(bodyText).toContain('0.6.0');
-    console.log('✓ 버전 0.6.0 페이지 내 텍스트 확인');
+    expect(bodyText).toContain('0.7.0');
+    console.log('✓ 버전 0.7.0 페이지 내 텍스트 확인');
   }
 });
 

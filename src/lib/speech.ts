@@ -245,13 +245,17 @@ export function cancelTts() {
   if (synth) synth.cancel();
 }
 
-/** Pre-warm the TTS engine to reduce first-utterance delay. */
+/** Pre-warm the TTS engine to reduce first-utterance delay.
+ *  Uses a near-silent '0' utterance — stronger iOS cold-start warm than an empty string. */
 export function warmupTts() {
   if (!synth) return;
-  const u = new SpeechSynthesisUtterance('');
-  u.volume = 0;
+  const u = new SpeechSynthesisUtterance('0');
+  const v = pickKoreanVoice();
+  if (v) u.voice = v;
+  u.lang = 'ko-KR';
+  u.volume = 0.01;
+  u.rate = 1.5;
   synth.speak(u);
-  synth.cancel();
 }
 
 /**

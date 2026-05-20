@@ -11,7 +11,7 @@ import { fetchAllRows, parseSpreadsheetId } from '../lib/sheets';
 import { getAccessToken } from '../lib/googleAuth';
 import type { Column, Session, SessionRow } from '../types';
 import { exportLogZip, downloadZip } from '../lib/exportLog';
-import { uploadLogToDrive } from '../lib/driveUpload';
+import { uploadLogToDrive, LOG_FOLDER_ID } from '../lib/driveUpload';
 
 export function DataScreen() {
   const sessions = useDataStore((s) => s.sessions);
@@ -33,11 +33,11 @@ export function DataScreen() {
 
   const lastSelectedIdsRef = useRef<string[]>([]);
 
-  const doLogDownload = useCallback(async () => {
+  const doSessionLogDownload = useCallback(async (sessionId: string, sessionDate: string) => {
     setBusy('로그 압축 중...');
     try {
-      const blob = await exportLogZip();
-      const filename = `growth-log_${new Date().toISOString().slice(0, 10)}.zip`;
+      const blob = await exportLogZip([sessionId]);
+      const filename = `growth-log_${sessionDate}_${sessionId.slice(-6)}.zip`;
       downloadZip(blob, filename);
       setMsg(`✓ ${filename} 다운로드됨`);
     } catch (err) {
@@ -86,28 +86,22 @@ export function DataScreen() {
         setMsg('추가할 새 데이터가 없습니다.');
       }
 
-      // 2) 로그 백업: failed 분기와 독립적으로 처리.
+      // 2) 로그 백업: 항상 시도 (autoUploadLogs 토글 제거 — 시트 추가 시 항상 백업).
       // Codex 5차 HIGH: 부분 성공(ok>0 && failed>0) 시 successIds의 로그도 반드시 백업되어야 함.
-      // 이 세션들은 syncedRows가 업데이트되어 retry 대상이 아니므로 여기서 백업 안 하면 영구 누락.
-      const settings = useSettingsStore.getState();
-      if (settings.autoUploadLogs) {
-        if (report.successIds.length > 0) {
-          try {
-            const blob = await exportLogZip(report.successIds);
-            const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
-            await uploadLogToDrive(blob, filename);
-            backupOk = true;
-            setMsg((m) => (m ? `${m} · 로그 Drive 백업됨` : '✓ 로그 Drive 백업됨'));
-          } catch (err) {
-            // Codex 재검증 HIGH-2: 백업 실패는 명시적으로 표시 (autoDelete 차단 조건).
-            setMsg((m) => (m ? `${m} · ⚠️ 로그 백업 실패` : '⚠️ 시트 추가 OK, 로그 백업 실패'));
-            console.warn('Drive 로그 업로드 실패', err);
-          }
+      if (report.successIds.length > 0) {
+        try {
+          const blob = await exportLogZip(report.successIds);
+          const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
+          await uploadLogToDrive(blob, filename);
+          backupOk = true;
+          setMsg((m) => (m ? `${m} · 로그 Drive 백업됨` : '✓ 로그 Drive 백업됨'));
+        } catch (err) {
+          // Codex 재검증 HIGH-2: 백업 실패는 명시적으로 표시 (autoDelete 차단 조건).
+          setMsg((m) => (m ? `${m} · ⚠️ 로그 백업 실패` : '⚠️ 시트 추가 OK, 로그 백업 실패'));
+          console.warn('Drive 로그 업로드 실패', err);
         }
-        // ok == 0 (전부 실패 또는 preflight) → 백업 대상 없음, backupOk는 false로 유지 (어차피 autoDelete 차단됨)
       } else {
-        // 토글 OFF — 사용자가 자발적으로 백업을 꺼둔 상태에서는 autoDelete 허용
-        backupOk = true;
+        // ok == 0 (전부 실패 또는 preflight) → 백업 대상 없음, backupOk false → autoDelete 차단
       }
       return { report, backupOk };
     } catch (err) {
@@ -256,21 +250,26 @@ export function DataScreen() {
         >
           CSV
         </button>
-        <button
-          onClick={doLogDownload}
-          disabled={busy !== null}
-          style={{
-            height: 52, padding: '0 14px', borderRadius: 14,
-            border: `1px solid ${T.lineStrong}`, background: T.card,
-            color: T.textDim, fontSize: 13, fontWeight: 700,
-            display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
-          }}
-          title="로그 ZIP 다운로드"
-        >
-          LOG
-        </button>
       </div>
 
+
+      {/* 시트 추가 시 로그 자동 백업 안내 */}
+      <div
+        style={{
+          padding: '0 16px 6px',
+          fontSize: 11, color: T.textMute, lineHeight: 1.4, flexShrink: 0,
+        }}
+      >
+        시트 추가 시 해당 세션의 음성 로그도 Drive에 자동 백업됩니다.{' '}
+        <span
+          style={{
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            fontSize: 10, color: T.textMute,
+          }}
+        >
+          ({LOG_FOLDER_ID.slice(0, 12)}…)
+        </span>
+      </div>
 
       {(busy || msg) && (
         <div
@@ -317,6 +316,7 @@ export function DataScreen() {
               expanded={expandedSessionId === s.id}
               onToggle={() => toggleExpand(s.id)}
               onDelete={() => setDeleteTarget(s)}
+              onDownloadLog={() => doSessionLogDownload(s.id, s.date)}
               onCellSave={(rowIndex, colId, value) => handleCellSave(s.id, rowIndex, colId, value)}
             />
           ))
@@ -768,12 +768,13 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
 
 // ─── session card ────────────────────────────────────────────
 function SessionCard({
-  session, expanded, onToggle, onDelete, onCellSave,
+  session, expanded, onToggle, onDelete, onDownloadLog, onCellSave,
 }: {
   session: Session;
   expanded: boolean;
   onToggle: () => void;
   onDelete: () => void;
+  onDownloadLog: () => void;
   onCellSave: (rowIndex: number, colId: string, value: string) => void;
 }) {
   const fullySynced = session.syncedRows >= session.completedRows && session.completedRows > 0;
@@ -861,6 +862,19 @@ function SessionCard({
           >
             {I.chevron(18, T.textDim)}
           </div>
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDownloadLog(); }}
+          style={{
+            padding: '0 10px',
+            background: 'transparent', border: 'none', borderLeft: `1px solid ${T.line}`,
+            color: T.textDim, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 11, fontWeight: 700,
+          }}
+          title="세션 로그 다운로드"
+        >
+          LOG
         </button>
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(); }}

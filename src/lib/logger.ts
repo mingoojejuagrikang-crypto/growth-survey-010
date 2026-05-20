@@ -6,7 +6,8 @@ import { appendLogEvent } from './db';
 
 export interface LogEntry {
   ts: number;
-  type: 'stt' | 'tts' | 'command' | 'session' | 'value' | 'error';
+  type: 'stt' | 'tts' | 'command' | 'session' | 'value' | 'error'
+    | 'stt_blocked_tts_muted' | 'stt_rejected_col_name' | 'stt_alt_used' | 'stt_parse_failed';
   sessionId?: string;
   row?: number;
   colId?: string;
@@ -21,6 +22,9 @@ export interface LogEntry {
   /** TTS engine cold-start latency (enqueue → audio onstart). v5.2 Additional-2. */
   startDelayMs?: number | null;
   extra?: string;
+  altIdx?: number;
+  originalText?: string;
+  altsCount?: number;
 }
 
 export interface DeviceInfo {

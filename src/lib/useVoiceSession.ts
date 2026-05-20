@@ -149,6 +149,27 @@ export function useVoiceSession() {
     [say],
   );
 
+  /** Announce row completion: only auto+ttsAnnounce columns that differ from the previous row. */
+  const announceRowComplete = useCallback(
+    async (row: number) => {
+      const cols = useSettingsStore.getState().columns;
+      const curAuto = buildCyclingValues(cols, row);
+      const prevAuto = row > 1 ? buildCyclingValues(cols, row - 1) : null;
+      const parts: string[] = [];
+      for (const c of cols) {
+        if (c.input !== 'auto' || !c.ttsAnnounce) continue;
+        const cv = curAuto[c.id] ?? '';
+        if (!cv) continue;
+        if (prevAuto === null || (prevAuto[c.id] ?? '') !== cv) {
+          parts.push(`${c.name} ${cv}`);
+        }
+      }
+      if (parts.length) await say(parts.join(', ') + ' 완료.', false);
+      else await say('완료.', false);
+    },
+    [say],
+  );
+
   const announceField = useCallback(
     async (col: Column, opts?: { isModify?: boolean }) => {
       const row = useSessionStore.getState().activeRow;
@@ -203,7 +224,7 @@ export function useVoiceSession() {
     sess.markRowComplete(row);
     sess.setPhase('complete');
     void persistSession();
-    await say(`${row}행 완료.`, false); // false: 에코 TTS 뒤에 큐잉 (에코 캔슬 방지)
+    await announceRowComplete(row);
 
     // If returnRow set (came from modify/jump), go back
     const ret = sess.returnRow;
@@ -236,7 +257,7 @@ export function useVoiceSession() {
     sess.setPhase('active');
     await announceRowDiff(row, next);
     if (vc[targetCol]) await announceField(vc[targetCol]);
-  }, [announceField, announceRowDiff, persistSession, say]);
+  }, [announceField, announceRowComplete, announceRowDiff, persistSession, say]);
 
   // ── modify (cross-row) ─────────────────────────────────────
   const enterModifyMode = useCallback(async (preExtractedValue?: string) => {
@@ -307,27 +328,44 @@ export function useVoiceSession() {
       }
     }
 
-    // Otherwise prepare modify-await on the target column
-    // Important: don't clear the previous value yet; wait for new input.
-    // But UI shows recognized blank.
-    if (targetRow !== curRow) {
-      // mark target row incomplete so it gets re-completed once modified
-      sess.markRowIncomplete(targetRow);
+    // Cascade clear: target col through end of row (so user re-records all remaining cols)
+    for (let i = targetIdx; i < vc.length; i++) {
+      sess.setRowValue(targetRow, vc[i].id, '');
+      // Clean up pending clips for cleared columns
+      const pendingMap = pendingClipsRef.current[targetRow];
+      if (pendingMap?.[vc[i].id]) {
+        const staleKey = pendingMap[vc[i].id];
+        delete pendingMap[vc[i].id];
+        void deleteAudioClip(staleKey).catch(() => {});
+      }
     }
-    // v5.2 8-2: returnRow 체인 보호 — 칩 이동 중에 수정 명령이 들어온 경우
-    // 기존 returnRow를 덮어쓰지 않고 유지하여 수정 완료 후에도 원래 위치로 복귀
-    const existingReturnRow = sess.returnRow;
-    const existingReturnCol = sess.returnColIdx;
-    if (existingReturnRow != null) {
-      // 칩 이동 흐름 중 — 기존 returnRow 유지
-      sess.setReturn(existingReturnRow, existingReturnCol);
-    } else {
-      // 통상 흐름 — 현재 위치로 복귀
-      sess.setReturn(curRow, curIdx);
+    // Update dataStore to remove audio clips for cleared columns
+    const existingSession = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+    const existingRow = existingSession?.rows.find((r) => r.index === targetRow);
+    if (existingSession && existingRow?.audioClips) {
+      const clearedIds = new Set(vc.slice(targetIdx).map((c) => c.id));
+      const newClips = Object.fromEntries(
+        Object.entries(existingRow.audioClips).filter(([k]) => !clearedIds.has(k)),
+      );
+      // Also delete stale IDB clips
+      for (const [colId, key] of Object.entries(existingRow.audioClips)) {
+        if (clearedIds.has(colId)) void deleteAudioClip(key as string).catch(() => {});
+      }
+      const updatedRow = {
+        ...existingRow,
+        audioClips: Object.keys(newClips).length > 0 ? newClips : undefined,
+      };
+      const updatedSession = {
+        ...existingSession,
+        rows: existingSession.rows.map((r) => (r.index === targetRow ? updatedRow : r)),
+      };
+      useDataStore.getState().upsertSession(updatedSession);
+      void saveSession(updatedSession).catch(() => {});
     }
+    sess.markRowIncomplete(targetRow);
+    // No returnRow — advance() naturally proceeds from targetIdx forward
     sess.setActiveRow(targetRow);
     sess.setActiveCol(targetIdx);
-    sess.setRowValue(targetRow, target.id, '');
     sess.setRecognized('');
     await announceField(target, { isModify: true });
   }, [announceField, persistSession, say]);
@@ -409,7 +447,7 @@ export function useVoiceSession() {
   );
 
   // ── final result handler ───────────────────────────────────
-  const handleFinal = useCallback(async (text: string, _alts: string[], confidence: number) => {
+  const handleFinal = useCallback(async (text: string, alts: string[], confidence: number) => {
     const awaiting = awaitingFieldRef.current;
     if (!awaiting) return;
     const myEpoch = ++epochRef.current;
@@ -425,6 +463,7 @@ export function useVoiceSession() {
         sessionId: sessionIdRef.current,
         row: awaiting.row,
         colId: awaiting.colId,
+        extra: ctrlRef.current?.isTtsMuted() ? 'tts_was_speaking' : 'tts_silent',
       });
     }
     if (cmd === 'end') {
@@ -461,8 +500,8 @@ export function useVoiceSession() {
     }
 
     // Input-2: TTS 재생 중에는 값 입력 무시 (명령어는 위에서 이미 처리됨)
-    // SpeechController.ttsMuted 플래그를 사용 — onstart/onend 경계로 더 안정적
     if (ctrlRef.current?.isTtsMuted()) {
+      logger.log({ type: 'stt_blocked_tts_muted', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
       return;
     }
 
@@ -476,8 +515,15 @@ export function useVoiceSession() {
       colName: awaiting.name,
       text,
       confidence,
-      alts: _alts,
+      alts,
     });
+
+    // Item 12: 컬럼명 완전 일치 STT 거부
+    const colNames = useSettingsStore.getState().columns.map((c) => c.name.trim());
+    if (colNames.includes(text.trim())) {
+      logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+      return;
+    }
 
     const noisyMode = useSettingsStore.getState().noisyMode;
     const minConfidence = noisyMode ? 0.80 : 0.65;
@@ -498,10 +544,23 @@ export function useVoiceSession() {
       return;
     }
 
-    // Plain value
+    // Plain value — with alts fallback on parse failure (item 11)
     const col = getColById(awaiting.colId);
-    const parsed = col ? parseValueForCol(col, text) : null;
+    let parsed = col ? parseValueForCol(col, text) : null;
+    if (parsed === null && alts.length > 1) {
+      for (let ai = 1; ai < Math.min(alts.length, 3); ai++) {
+        const alt = alts[ai];
+        if (!alt || alt === text) continue;
+        const altParsed = col ? parseValueForCol(col, alt) : null;
+        if (altParsed !== null) {
+          parsed = altParsed;
+          logger.log({ type: 'stt_alt_used', altIdx: ai, text: alt, originalText: text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+          break;
+        }
+      }
+    }
     if (parsed === null) {
+      logger.log({ type: 'stt_parse_failed', text, altsCount: alts.length, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
       recorderRef.current?.startClip(); // restart clip
       await say(`${awaiting.name} 다시 말씀해 주세요.`);
       return;
