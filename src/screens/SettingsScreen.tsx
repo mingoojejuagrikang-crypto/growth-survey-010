@@ -151,7 +151,7 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
         <span style={{ fontSize: 13, color: T.textMute }}>고정값</span>
         <input
-          type={col.type === 'date' ? 'date' : 'text'}
+          type={col.type === 'date' && col.auto.kind === 'fixed' && col.auto.value !== '오늘' ? 'date' : 'text'}
           value={col.auto.kind === 'fixed' ? col.auto.value : ''}
           placeholder={col.type === 'date' ? '오늘' : '값'}
           onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v.target.value } })}
