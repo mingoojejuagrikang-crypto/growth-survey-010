@@ -328,46 +328,19 @@ export function useVoiceSession() {
       }
     }
 
-    // Cascade clear: target col through end of row (so user re-records all remaining cols)
+    // Cascade clear in-memory only: target col through end of row (so user re-records all remaining cols).
+    // Persisted IDB/dataStore state is left intact until the row is successfully re-completed and
+    // persistSession() overwrites it — this ensures old measurements survive a crash/reload during correction.
     for (let i = targetIdx; i < vc.length; i++) {
       sess.setRowValue(targetRow, vc[i].id, '');
-      // Clean up pending clips for cleared columns
+      // Only delete clips that are still pending (not yet saved to IDB).
+      // Already-persisted clips stay until persistSession() replaces them on re-completion.
       const pendingMap = pendingClipsRef.current[targetRow];
       if (pendingMap?.[vc[i].id]) {
         const staleKey = pendingMap[vc[i].id];
         delete pendingMap[vc[i].id];
         void deleteAudioClip(staleKey).catch(() => {});
       }
-    }
-    // Update dataStore: clear values + audioClips for cascaded columns and mark row incomplete.
-    const existingSession = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
-    const existingRow = existingSession?.rows.find((r) => r.index === targetRow);
-    if (existingSession && existingRow) {
-      const clearedIds = new Set(vc.slice(targetIdx).map((c) => c.id));
-      // Clear audio clips for cascaded columns
-      if (existingRow.audioClips) {
-        const newClips = Object.fromEntries(
-          Object.entries(existingRow.audioClips).filter(([k]) => !clearedIds.has(k)),
-        );
-        for (const [colId, key] of Object.entries(existingRow.audioClips)) {
-          if (clearedIds.has(colId)) void deleteAudioClip(key as string).catch(() => {});
-        }
-        existingRow.audioClips = Object.keys(newClips).length > 0 ? newClips : undefined;
-      }
-      // Clear values for cascaded columns and mark row incomplete
-      const newValues = Object.fromEntries(
-        Object.entries(existingRow.values).filter(([k]) => !clearedIds.has(k)),
-      );
-      const updatedRow = { ...existingRow, values: newValues, complete: false };
-      const updatedRows = existingSession.rows.map((r) => (r.index === targetRow ? updatedRow : r));
-      const updatedSession = {
-        ...existingSession,
-        rows: updatedRows,
-        completedRows: updatedRows.filter((r) => r.complete).length,
-        syncedRows: Math.min(existingSession.syncedRows, targetRow - 1),
-      };
-      useDataStore.getState().upsertSession(updatedSession);
-      void saveSession(updatedSession).catch(() => {});
     }
     sess.markRowIncomplete(targetRow);
     // No returnRow — advance() naturally proceeds from targetIdx forward

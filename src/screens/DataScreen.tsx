@@ -498,6 +498,10 @@ function SyncSessionModal({
             display: 'flex', flexDirection: 'column', gap: 10,
           }}
         >
+          {/* Log backup notice shown before every sync */}
+          <div style={{ fontSize: 12, color: T.textMute, padding: '2px 0' }}>
+            시트 추가 시 해당 세션의 음성 로그가 Drive에 자동 백업됩니다.
+          </div>
           {/* Auto-delete toggle */}
           <button
             onClick={() => setAutoDelete((v) => !v)}
