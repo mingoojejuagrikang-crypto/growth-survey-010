@@ -96,7 +96,10 @@ export function useVoiceSession() {
     const settings = useSettingsStore.getState();
     const sess = useSessionStore.getState();
     const completed = [...sess.completedRows].sort((a, b) => a - b);
-    if (completed.length === 0) return;
+    // Check backup BEFORE early return: if cascade correction is in progress and the correcting row
+    // was the only completed row, we still need to persist the backup snapshot.
+    const backup = correctionBackupRef.current;
+    if (completed.length === 0 && !backup) return;
     const rows: SessionRow[] = completed.map((r) => {
       const auto = buildCyclingValues(settings.columns, r);
       const fixedAndAuto = autoNonCyclingValues(settings.columns, r);
@@ -119,7 +122,6 @@ export function useVoiceSession() {
     });
     // If stop() fires while a cascade correction is in progress (row not yet re-completed),
     // include the backup snapshot so original measurements survive the persist.
-    const backup = correctionBackupRef.current;
     if (backup && !completed.includes(backup.index)) {
       rows.push({ ...backup });
       rows.sort((a, b) => a.index - b.index);
