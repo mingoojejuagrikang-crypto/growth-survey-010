@@ -32,6 +32,9 @@ export function useVoiceSession() {
   const pendingClipsRef = useRef<Record<number, Record<string, string>>>({});
   // Codex 재검증 MEDIUM: in-flight clip save promises; stop()/pause()가 끝나기 전 flush
   const pendingClipSavesRef = useRef<Set<Promise<unknown>>>(new Set());
+  // Snapshot of a persisted row being cascade-corrected; included in persistSession if stop()
+  // fires before re-completion so original measurements are not lost.
+  const correctionBackupRef = useRef<SessionRow | null>(null);
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
@@ -114,6 +117,13 @@ export function useVoiceSession() {
         audioClips: Object.keys(mergedClips).length > 0 ? mergedClips : undefined,
       };
     });
+    // If stop() fires while a cascade correction is in progress (row not yet re-completed),
+    // include the backup snapshot so original measurements survive the persist.
+    const backup = correctionBackupRef.current;
+    if (backup && !completed.includes(backup.index)) {
+      rows.push({ ...backup });
+      rows.sort((a, b) => a.index - b.index);
+    }
     const session: Session = {
       id: sessionIdRef.current,
       date: new Date().toISOString().slice(0, 10),
@@ -221,6 +231,7 @@ export function useVoiceSession() {
     }
 
     // All voice cols in this row filled — complete
+    if (correctionBackupRef.current?.index === row) correctionBackupRef.current = null;
     sess.markRowComplete(row);
     sess.setPhase('complete');
     void persistSession();
@@ -327,6 +338,11 @@ export function useVoiceSession() {
         return;
       }
     }
+
+    // Snapshot the existing persisted row before clearing in-memory.
+    // persistSession() includes this backup if stop() fires before re-completion.
+    const existingForBackup = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+    correctionBackupRef.current = existingForBackup?.rows.find((r) => r.index === targetRow) ?? null;
 
     // Cascade clear in-memory only: target col through end of row (so user re-records all remaining cols).
     // Persisted IDB/dataStore state is left intact until the row is successfully re-completed and
@@ -647,6 +663,7 @@ export function useVoiceSession() {
     warmupTts();
     epochRef.current = 0;
     pendingClipsRef.current = {};
+    correctionBackupRef.current = null;
     logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'start' });
 
     // Init audio recorder (best-effort, don't block if permission denied)
