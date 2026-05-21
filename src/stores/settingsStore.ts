@@ -21,6 +21,8 @@ interface SettingsState {
   sessionAutoLabel: string | null;
   /** Noisy environment mode — raises STT confidence threshold + rejects single-char results. */
   noisyMode: boolean;
+  /** Preferred Web Speech API voice name for ko-KR TTS. Empty string = auto (first available). */
+  preferredVoiceName: string;
 
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns'>>) => void;
   updateColumn: (id: string, next: Column) => void;
@@ -84,6 +86,7 @@ export const useSettingsStore = create<SettingsState>()(
       sessionLabelColId: null,
       sessionAutoLabel: null,
       noisyMode: false,
+      preferredVoiceName: '',
 
       set: (partial) => set(partial),
       updateColumn: (id, next) =>
@@ -127,6 +130,7 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.sessionLabelColId !== 'string' && s.sessionLabelColId !== null) s.sessionLabelColId = null;
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
         if (typeof s.noisyMode !== 'boolean') s.noisyMode = false;
+        if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         return s as SettingsState;
       },
     },

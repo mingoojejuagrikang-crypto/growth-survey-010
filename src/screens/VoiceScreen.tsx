@@ -7,14 +7,13 @@ import { useSessionStore } from '../stores/sessionStore';
 import { computeTotalRows, nestedAutoValue, computeRowFromAutoChange } from '../lib/autoValue';
 import { useWakeLock, lockPortrait } from '../lib/wakeLock';
 import { useVoiceSession } from '../lib/useVoiceSession';
-import { isSpeechSupported } from '../lib/speech';
+import { isSpeechSupported, speak } from '../lib/speech';
 import type { Column } from '../types';
 
 export function VoiceScreen() {
   const s = useSettingsStore();
   const sess = useSessionStore();
   const voiceSession = useVoiceSession();
-  const [labelModal, setLabelModal] = useState(false);
   const [confidence, setConfidence] = useState<number | null>(null);
 
   useWakeLock(sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused');
@@ -34,23 +33,13 @@ export function VoiceScreen() {
 
   if (sess.phase === 'ready') {
     return (
-      <>
-        <ReadyState
-          totalRows={totalRows}
-          onStart={() => setLabelModal(true)}
-        />
-        {labelModal && (
-          <SessionLabelDialog
-            defaultLabel={s.sessionAutoLabel || buildAutoLabel(s.columns)}
-            onCancel={() => setLabelModal(false)}
-            onConfirm={async (label) => {
-              setLabelModal(false);
-              await voiceSession.start(label);
-              await lockPortrait();
-            }}
-          />
-        )}
-      </>
+      <ReadyState
+        totalRows={totalRows}
+        onStart={async () => {
+          await voiceSession.start(s.sessionAutoLabel || buildAutoLabel(s.columns));
+          await lockPortrait();
+        }}
+      />
     );
   }
 
@@ -99,95 +88,6 @@ function buildAutoLabel(columns: Column[]): string {
     }
   }
   return dateStr;
-}
-
-// ─── label dialog ─────────────────────────────────────────────
-function SessionLabelDialog({
-  defaultLabel, onCancel, onConfirm,
-}: {
-  defaultLabel: string;
-  onCancel: () => void;
-  onConfirm: (label: string) => void;
-}) {
-  const [value, setValue] = useState(defaultLabel);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
-
-  return (
-    <div
-      onClick={onCancel}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 100,
-        background: 'rgba(0,0,0,0.55)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16,
-        animation: 'fade-up 200ms ease-out',
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: T.card, borderRadius: 18,
-          border: `1px solid ${T.line}`,
-          width: '100%', maxWidth: 360,
-          padding: 20,
-          display: 'flex', flexDirection: 'column', gap: 14,
-          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-        }}
-      >
-        <div style={{ fontSize: 18, fontWeight: 700, color: T.text }}>오늘 세션 시작</div>
-        <div style={{ fontSize: 13, color: T.textMute, lineHeight: 1.5 }}>
-          데이터 탭에서 세션을 구분할 라벨입니다.
-        </div>
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') onConfirm(value);
-            else if (e.key === 'Escape') onCancel();
-          }}
-          placeholder="예: 이원창 5월 15일"
-          style={{
-            height: 52, borderRadius: 12,
-            background: T.inputBg, border: `1px solid ${T.line}`,
-            color: T.text, fontSize: 17, fontWeight: 700,
-            outline: 'none', padding: '0 14px',
-            letterSpacing: -0.2,
-          }}
-        />
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            onClick={() => onConfirm('')}
-            style={{
-              flex: 1, height: 48, borderRadius: 14,
-              border: `1px solid ${T.lineStrong}`, background: 'transparent',
-              color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
-            }}
-          >
-            건너뛰기
-          </button>
-          <button
-            onClick={() => onConfirm(value)}
-            style={{
-              flex: 1, height: 48, borderRadius: 14, border: 'none',
-              background: T.blue, color: '#fff',
-              fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
-              cursor: 'pointer',
-              boxShadow: `0 4px 14px ${T.blueGlow}`,
-            }}
-          >
-            시작
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 // ─── READY ────────────────────────────────────────────────────
@@ -531,7 +431,7 @@ function ActiveState({
           }}
         >
           <span style={{ fontWeight: 700 }}>명령:</span>
-          {['수정', '스킵', '일시정지', '종료'].map((cmd) => (
+          {['수정', '스킵', '일시정지', '재시작', '종료'].map((cmd) => (
             <span
               key={cmd}
               style={{
@@ -545,7 +445,51 @@ function ActiveState({
           ))}
         </div>
       </div>
+      <ActiveTtsSlider />
     </>
+  );
+}
+
+function ActiveTtsSlider() {
+  const s = useSettingsStore();
+  const debounceRef = useRef<number | null>(null);
+  const sample = (rate: number) => {
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => {
+      void speak('이 속도로 안내합니다.', { interrupt: true, rate });
+    }, 350);
+  };
+  return (
+    <div
+      style={{
+        padding: '6px 16px 10px', flexShrink: 0,
+        display: 'flex', alignItems: 'center', gap: 10,
+      }}
+    >
+      <span style={{ fontSize: 12, color: T.textMute, whiteSpace: 'nowrap' }}>속도</span>
+      <input
+        type="range"
+        min={0.5}
+        max={2}
+        step={0.05}
+        value={s.ttsRate}
+        onChange={(e) => {
+          const v = parseFloat(e.target.value);
+          s.set({ ttsRate: v });
+          sample(v);
+        }}
+        style={{ flex: 1, accentColor: T.blue }}
+      />
+      <span
+        style={{
+          fontSize: 12, fontWeight: 700, color: T.blue,
+          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+          minWidth: 36, textAlign: 'right',
+        }}
+      >
+        {s.ttsRate.toFixed(2)}x
+      </span>
+    </div>
   );
 }
 

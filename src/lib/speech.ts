@@ -203,9 +203,21 @@ if (synth) {
   synth.onvoiceschanged = loadVoices;
 }
 
+let _preferredVoiceName = '';
+export function setPreferredVoiceName(name: string) { _preferredVoiceName = name; }
+
 function pickKoreanVoice(): SpeechSynthesisVoice | null {
   const candidates = voicesCache.filter((v) => v.lang?.toLowerCase().startsWith('ko'));
+  if (_preferredVoiceName) {
+    const preferred = candidates.find((v) => v.name === _preferredVoiceName);
+    if (preferred) return preferred;
+  }
   return candidates[0] || null;
+}
+
+/** Returns all available Korean voices. */
+export function getKoreanVoices(): SpeechSynthesisVoice[] {
+  return voicesCache.filter((v) => v.lang?.toLowerCase().startsWith('ko'));
 }
 
 export interface SpeakOptions {

@@ -3,7 +3,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { parseKoreanNumber, detectCommand, extractModifyValue } from './koreanNum';
-import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController } from './speech';
+import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
 import { saveSession, saveAudioClip, deleteAudioClip } from './db';
@@ -35,6 +35,8 @@ export function useVoiceSession() {
   // Snapshot of a persisted row being cascade-corrected; included in persistSession if stop()
   // fires before re-completion so original measurements are not lost.
   const correctionBackupRef = useRef<SessionRow | null>(null);
+  // Ref to resume() — breaks the circular dependency between handleFinal and resume.
+  const resumeRef = useRef<() => Promise<void>>(async () => {});
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
@@ -468,6 +470,15 @@ export function useVoiceSession() {
     const myEpoch = ++epochRef.current;
     const cmd = detectCommand(text);
 
+    // While paused, only handle the 'resume' command; ignore everything else.
+    if (useSessionStore.getState().phase === 'paused') {
+      if (cmd === 'resume') {
+        cancelTts();
+        await resumeRef.current();
+      }
+      return;
+    }
+
     // Commands interrupt TTS immediately
     if (cmd) {
       logger.log({
@@ -489,6 +500,11 @@ export function useVoiceSession() {
     if (cmd === 'pause') {
       cancelTts();
       await pause();
+      return;
+    }
+    if (cmd === 'resume') {
+      cancelTts();
+      await resumeRef.current();
       return;
     }
     if (cmd === 'skip') {
@@ -540,6 +556,8 @@ export function useVoiceSession() {
       const colNames = allColumns.map((c) => c.name.trim());
       if (colNames.includes(text.trim())) {
         logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        useSessionStore.getState().setRecognized('');
+        await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
     }
@@ -660,6 +678,7 @@ export function useVoiceSession() {
   // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async (label?: string) => {
     const s = useSettingsStore.getState();
+    setPreferredVoiceName(s.preferredVoiceName);
     const sess = useSessionStore.getState();
     if (!s.tableGenerated) return false;
     const vc = s.columns.filter((c) => c.input === 'voice');
@@ -727,35 +746,47 @@ export function useVoiceSession() {
     void persistSession();
   }, [persistSession, say]);
 
-  /** Pause STT + TTS without finalizing. UI shows paused state. */
+  /** Pause STT value processing without stopping the controller.
+   *  The controller stays active so the user can say '재시작' to resume.
+   *  Recorder is disposed to prevent clip accumulation while paused. */
   const pause = useCallback(async () => {
-    setActiveController(null);
-    ctrlRef.current?.stop();
-    ctrlRef.current = null;
     cancelTts();
+    recorderRef.current?.dispose();
+    recorderRef.current = null;
     useSessionStore.getState().setPhase('paused');
     useSessionStore.getState().setLastTts('일시정지됨. 마이크 다시 탭하면 재개됩니다.');
     await say('일시정지.');
   }, [say]);
 
-  /** Resume from paused: restart STT and re-announce current field. */
+  /** Resume from paused: re-announce current field. Controller is kept alive during pause. */
   const resume = useCallback(async () => {
     const sess = useSessionStore.getState();
     if (sess.phase !== 'paused') return;
     sess.setPhase('active');
     epochRef.current = 0;
-    ctrlRef.current = new SpeechController({
-      onFinal: handleFinal,
-      onError: () => {},
-    });
-    setActiveController(ctrlRef.current);
-    ctrlRef.current.start();
-    // Re-announce current voice column
+    // Controller stays alive during pause (pause() no longer stops it).
+    // Recreate only if it was somehow stopped (e.g., programmatic stop from outside).
+    if (!ctrlRef.current) {
+      ctrlRef.current = new SpeechController({
+        onFinal: handleFinal,
+        onError: () => {},
+      });
+      setActiveController(ctrlRef.current);
+      ctrlRef.current.start();
+    }
+    // Recorder was disposed during pause — recreate for the resumed session.
+    if (!recorderRef.current) {
+      recorderRef.current = new AudioRecorder();
+      await recorderRef.current.init().catch(() => {});
+    }
     const vc = voiceColsList();
     const cur = vc[sess.activeColIdx];
     if (cur) await announceField(cur);
     else await say('재개합니다.');
   }, [announceField, handleFinal, say]);
+
+  // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
+  useEffect(() => { resumeRef.current = resume; }, [resume]);
 
   // unmount cleanup
   useEffect(() => () => {

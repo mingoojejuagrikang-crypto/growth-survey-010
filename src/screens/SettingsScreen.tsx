@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { T, TYPE_LABELS, TYPE_COLORS } from '../tokens';
 import { I, AuthMark } from '../components/icons';
 import { Chip } from '../components/Chip';
@@ -20,9 +20,9 @@ import {
   parseSpreadsheetId,
 } from '../lib/sheets';
 import { computeTotalRows, nestedAutoValue, buildCyclingValues } from '../lib/autoValue';
-import { speak } from '../lib/speech';
 import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
+import { getKoreanVoices, setPreferredVoiceName } from '../lib/speech';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
@@ -145,15 +145,60 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
     );
   }
 
-  // date / text : fixed value only
-  if (col.type === 'date' || col.type === 'text') {
+  // date type: "오늘" radio or date picker
+  if (col.type === 'date') {
+    const isToday = col.auto.kind !== 'fixed' || col.auto.value === '오늘' || col.auto.value === '';
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 13, color: T.text }}>
+            <input
+              type="radio"
+              checked={isToday}
+              onChange={() => onChange({ ...col, auto: { kind: 'fixed', value: '오늘' } })}
+              style={{ accentColor: T.blue }}
+            />
+            오늘
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 13, color: T.text }}>
+            <input
+              type="radio"
+              checked={!isToday}
+              onChange={() => {
+                const today = new Date().toISOString().slice(0, 10);
+                onChange({ ...col, auto: { kind: 'fixed', value: today } });
+              }}
+              style={{ accentColor: T.blue }}
+            />
+            날짜 지정
+          </label>
+        </div>
+        {!isToday && (
+          <input
+            type="date"
+            value={col.auto.kind === 'fixed' ? col.auto.value : ''}
+            onChange={(e) => onChange({ ...col, auto: { kind: 'fixed', value: e.target.value } })}
+            style={{
+              height: 36, borderRadius: 8,
+              background: T.inputBg, border: `1px solid ${T.line}`,
+              color: T.text, fontSize: 15, fontWeight: 600,
+              outline: 'none', padding: '0 10px',
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // text : fixed value only
+  if (col.type === 'text') {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
         <span style={{ fontSize: 13, color: T.textMute }}>고정값</span>
         <input
-          type={col.type === 'date' && col.auto.kind === 'fixed' && col.auto.value !== '오늘' ? 'date' : 'text'}
+          type="text"
           value={col.auto.kind === 'fixed' ? col.auto.value : ''}
-          placeholder={col.type === 'date' ? '오늘' : '값'}
+          placeholder="값"
           onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v.target.value } })}
           style={{
             flex: 1, height: 36, borderRadius: 8,
@@ -435,52 +480,43 @@ function ColumnCard({
   );
 }
 
-// ─── TTS rate slider ───────────────────────────────────────────
-function TtsRateSlider({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const debounceRef = useRef<number | null>(null);
-  const sample = (rate: number) => {
-    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => {
-      void speak('이 속도로 안내합니다.', { interrupt: true, rate });
-    }, 350);
-  };
+// ─── TTS voice selector ────────────────────────────────────────
+function TtsVoiceSelector() {
+  const s = useSettingsStore();
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    const refresh = () => setVoices(getKoreanVoices());
+    refresh();
+    window.speechSynthesis?.addEventListener('voiceschanged', refresh);
+    return () => window.speechSynthesis?.removeEventListener('voiceschanged', refresh);
+  }, []);
+
+  // Sync preferred voice name into the speech module whenever it changes
+  useEffect(() => {
+    setPreferredVoiceName(s.preferredVoiceName);
+  }, [s.preferredVoiceName]);
+
+  if (voices.length === 0) return null;
+
   return (
-    <div
-      style={{
-        background: T.card, borderRadius: 14, padding: 12,
-        border: `1px solid ${T.line}`,
-        display: 'flex', flexDirection: 'column', gap: 8,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>TTS 속도</span>
-        <span
-          style={{
-            fontSize: 16, fontWeight: 800, color: T.blue,
-            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-          }}
-        >
-          {value.toFixed(2)}x
-        </span>
-      </div>
-      <input
-        type="range"
-        min={0.5}
-        max={2}
-        step={0.05}
-        value={value}
-        onChange={(e) => {
-          const v = parseFloat(e.target.value);
-          onChange(v);
-          sample(v);
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>TTS 음성</div>
+      <select
+        value={s.preferredVoiceName}
+        onChange={(e) => s.set({ preferredVoiceName: e.target.value })}
+        style={{
+          flex: 1, maxWidth: 220, height: 36, borderRadius: 8,
+          background: T.inputBg, border: `1px solid ${T.line}`,
+          color: T.text, fontSize: 13, fontWeight: 600,
+          padding: '0 8px', outline: 'none',
         }}
-        style={{ width: '100%', accentColor: T.blue }}
-      />
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: T.textMute }}>
-        <span>느림 0.5x</span>
-        <span>기본 1.0x</span>
-        <span>빠름 2.0x</span>
-      </div>
+      >
+        <option value="">(기본)</option>
+        {voices.map((v) => (
+          <option key={v.name} value={v.name}>{v.name}</option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -891,12 +927,7 @@ export function SettingsScreen() {
           </div>
         </div>
 
-        {/* Section 2 - TTS Speed */}
-        <div style={{ marginTop: 14, padding: '0 16px' }}>
-          <TtsRateSlider value={s.ttsRate} onChange={(v) => s.set({ ttsRate: v })} />
-        </div>
-
-        {/* Section 3 - Column list */}
+        {/* Section 2 - Column list */}
         <div
           style={{
             marginTop: 14, paddingLeft: 16, paddingRight: 16,
@@ -1061,6 +1092,8 @@ export function SettingsScreen() {
             <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
               비닐하우스·기계 소음 환경에서 음성 인식 정확도를 높입니다 (낮은 신뢰도 결과 거부).
             </div>
+
+            <TtsVoiceSelector />
 
           </div>
         </div>

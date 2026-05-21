@@ -225,7 +225,7 @@ function formatNum(n: number, maxDecimals?: number): string {
 }
 
 // ─── Voice commands ────────────────────────────────────────────
-export type VoiceCommand = 'modify' | 'cancel' | 'redo' | 'end' | 'skip' | 'pause' | null;
+export type VoiceCommand = 'modify' | 'cancel' | 'redo' | 'end' | 'skip' | 'pause' | 'resume' | null;
 
 export function detectCommand(raw: string): VoiceCommand {
   const s = raw.replace(/[\s.,]+/g, '');
@@ -233,6 +233,7 @@ export function detectCommand(raw: string): VoiceCommand {
   if (/(수정|정정)$/.test(s) && /^[0-9]/.test(s)) return 'modify';  // 후치: "178.1 정정" (숫자 시작만)
   if (/^(취소|지우기|지워)/.test(s)) return 'cancel';
   if (/^(일시정지|일시중지|멈춤|정지)/.test(s)) return 'pause';
+  if (/^(재시작|다시시작|계속)/.test(s)) return 'resume';
   if (/^(다시|재입력)/.test(s)) return 'redo';
   if (/^(스킵|건너|패스|다음)/.test(s)) return 'skip';
   if (/^(종료|끝|마침|스톱|stop)/i.test(s)) return 'end';
