@@ -238,7 +238,7 @@ export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
   return new Promise((resolve) => {
     const u = new SpeechSynthesisUtterance(text);
     const v = pickKoreanVoice();
-    if (v) u.voice = v;
+    if (v) try { u.voice = v; } catch { /* ignore — plain-object voice in test/mock env */ }
     u.lang = 'ko-KR';
     u.rate = opts.rate ?? 1.05;
     u.pitch = opts.pitch ?? 1;
@@ -263,7 +263,7 @@ export function warmupTts() {
   if (!synth) return;
   const u = new SpeechSynthesisUtterance('0');
   const v = pickKoreanVoice();
-  if (v) u.voice = v;
+  if (v) try { u.voice = v; } catch { /* ignore — plain-object voice in test/mock env */ }
   u.lang = 'ko-KR';
   u.volume = 0.01;
   u.rate = 1.5;

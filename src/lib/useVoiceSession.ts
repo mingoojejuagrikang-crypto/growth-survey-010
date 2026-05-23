@@ -10,6 +10,7 @@ import { saveSession, saveAudioClip, deleteAudioClip } from './db';
 import { AudioRecorder } from './audioRecorder';
 import { logger } from './logger';
 
+
 interface AwaitingField {
   row: number;
   colId: string;
@@ -239,6 +240,7 @@ export function useVoiceSession() {
     sess.markRowComplete(row);
     sess.setPhase('complete');
     void persistSession();
+    awaitingFieldRef.current = null; // 완료 TTS 동안 STT 입력 무시
     await announceRowComplete(row);
 
     // If returnRow set (came from modify/jump), go back
@@ -251,6 +253,7 @@ export function useVoiceSession() {
       sess.setActiveCol(targetCol);
       sess.setRecognized('');
       sess.setPhase('active');
+      awaitingFieldRef.current = null; // rowDiff TTS 동안 STT 입력 무시
       await announceRowDiff(row, ret);
       if (vc[targetCol]) await announceField(vc[targetCol]);
       return;
@@ -270,6 +273,7 @@ export function useVoiceSession() {
     sess.setActiveCol(targetCol);
     sess.setRecognized('');
     sess.setPhase('active');
+    awaitingFieldRef.current = null; // rowDiff TTS 동안 STT 입력 무시
     await announceRowDiff(row, next);
     if (vc[targetCol]) await announceField(vc[targetCol]);
   }, [announceField, announceRowComplete, announceRowDiff, persistSession, say]);
@@ -400,6 +404,7 @@ export function useVoiceSession() {
     }
     sess.markRowComplete(row);
     void persistSession();
+    awaitingFieldRef.current = null; // 건너뜀 TTS 동안 STT 입력 무시
     await say('건너뜁니다.');
     // Move to next incomplete row
     const next = findNextIncompleteRow(row + 1, total, vc);
@@ -413,6 +418,7 @@ export function useVoiceSession() {
     const targetCol = firstIncompleteColIdx(next, vc);
     sess.setActiveCol(targetCol);
     sess.setRecognized('');
+    awaitingFieldRef.current = null; // rowDiff TTS 동안 STT 입력 무시
     await announceRowDiff(row, next);
     if (vc[targetCol]) await announceField(vc[targetCol]);
   }, [announceField, announceRowDiff, persistSession, say]);
@@ -704,9 +710,10 @@ export function useVoiceSession() {
     correctionBackupRef.current = null;
     logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'start' });
 
-    // Init audio recorder (best-effort, don't block if permission denied)
+    // Init audio recorder fire-and-forget — mic permission is independent of STT startup.
+    // Awaiting getUserMedia can block indefinitely in headless/denied-permission environments.
     if (!recorderRef.current) recorderRef.current = new AudioRecorder();
-    await recorderRef.current.init().catch(() => {});
+    void recorderRef.current.init().catch(() => {});
 
     await say('음성 입력을 시작합니다.');
     await announceRowDiff(null, 1);
