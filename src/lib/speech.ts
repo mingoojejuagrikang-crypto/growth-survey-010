@@ -9,6 +9,8 @@
  *  - On user request to interrupt TTS, we cancel synthesis queue
  */
 
+import { detectCommand } from './koreanNum';
+
 type SRCtor = new () => SpeechRecognitionLike;
 
 type WindowWithSR = Window & typeof globalThis & {
@@ -147,6 +149,9 @@ export class SpeechController {
       const confidence = r[0]?.confidence ?? 1;
       const alts: string[] = [];
       for (let i = 0; i < r.length; i++) alts.push(r[i].transcript.trim());
+      if (!final && this.ttsMuted && detectCommand(text)) {
+        synth?.cancel();
+      }
       if (final) this.cb.onFinal(text, alts, confidence);
       else this.cb.onInterim?.(text);
     };

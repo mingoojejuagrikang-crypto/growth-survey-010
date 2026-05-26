@@ -78,5 +78,10 @@ input::placeholder {
   to { transform: scaleX(1); }
 }
 
+@keyframes chip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 /* prevent iOS bounce, keep PWA feel */
 html { -webkit-text-size-adjust: 100%; }

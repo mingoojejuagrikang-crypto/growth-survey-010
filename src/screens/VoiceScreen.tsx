@@ -556,6 +556,7 @@ function ColumnChip({
         minWidth: 0,
         overflow: 'hidden',
         transition: 'background 150ms, border 150ms',
+        animation: isActive ? 'chip-pulse 1.2s ease-in-out infinite' : 'none',
       }}
     >
       {isActive && (

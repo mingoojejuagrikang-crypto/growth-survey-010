@@ -36,6 +36,7 @@ export interface DeviceInfo {
   deviceMemory?: number;
   hardwareConcurrency?: number;
   appVersion: string;
+  audioInputDevices?: { deviceId: string; label: string; kind: string }[];
 }
 
 const entries: LogEntry[] = [];
@@ -53,6 +54,18 @@ export const logger = {
       hardwareConcurrency: nav.hardwareConcurrency,
       appVersion: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?',
     };
+  },
+
+  async deviceAsync(): Promise<DeviceInfo> {
+    const base = this.device();
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter((d) => d.kind === 'audioinput');
+      base.audioInputDevices = audioInputs.map((d) => ({
+        deviceId: d.deviceId, label: d.label, kind: d.kind,
+      }));
+    } catch { /* permission denied or unavailable */ }
+    return base;
   },
 
   log(entry: Omit<LogEntry, 'ts'>): void {

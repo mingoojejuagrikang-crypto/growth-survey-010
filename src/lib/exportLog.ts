@@ -12,7 +12,8 @@ import { loadAudioClip, loadAllAudioClipKeys, loadLogEvents } from './db';
  */
 export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
   const zip = new JSZip();
-  zip.file('device.json', JSON.stringify(logger.device(), null, 2));
+  const deviceInfo = await logger.deviceAsync();
+  zip.file('device.json', JSON.stringify(deviceInfo, null, 2));
 
   const filterSet = sessionIds ? new Set(sessionIds) : null;
 
