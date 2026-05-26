@@ -49,7 +49,7 @@ async function goToVoice(page: Page) {
 
 // TYPE_ORDER = ['date','text','int','float','options'], 새 컬럼 기본값='text'
 const TYPE_LABEL_MAP: Record<string, string> = {
-  date: '날짜', text: '텍스트', int: '정수', float: '실수', options: '선택',
+  date: '날짜', text: '텍스트', int: '정수', float: '실수', options: '리스트',
 };
 const ALL_TYPE_LABELS = Object.values(TYPE_LABEL_MAP).join('|');
 
@@ -139,14 +139,14 @@ test('앱 로드 — 3개 탭 모두 표시', async ({ page }) => {
 // ═════════════════════════════════════════════════════════════════════════════
 // 2. 버전 확인
 // ═════════════════════════════════════════════════════════════════════════════
-test('[설정] v0.8.0 버전 표시', async ({ page }) => {
+test('[설정] v0.9.0 버전 표시', async ({ page }) => {
   await goToSettings(page);
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(200);
 
   const bodyText = await page.evaluate(() => document.body.innerText);
-  expect(bodyText).toContain('0.8.0');
-  console.log('✓ 버전 0.8.0 확인');
+  expect(bodyText).toContain('0.9.0');
+  console.log('✓ 버전 0.9.0 확인');
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -305,14 +305,14 @@ test('[설정] 컬럼 타입 변경 — 사이클 순서 확인', async ({ page 
 
   for (let i = 0; i < 5; i++) {
     const text = (await typeBtn.textContent()) ?? '';
-    const label = ['날짜', '텍스트', '정수', '실수', '선택'].find((l) => text.includes(l));
+    const label = ['날짜', '텍스트', '정수', '실수', '리스트'].find((l) => text.includes(l));
     if (label) sequence.push(label);
     await typeBtn.click();
     await page.waitForTimeout(200);
   }
 
   // 5번 클릭 후 원점 복귀: text(시작) → int → float → options → date → text
-  expect(sequence).toEqual(['텍스트', '정수', '실수', '선택', '날짜']);
+  expect(sequence).toEqual(['텍스트', '정수', '실수', '리스트', '날짜']);
   console.log(`✓ 타입 사이클 확인: ${sequence.join(' → ')}`);
 });
 
