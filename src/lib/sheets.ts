@@ -147,7 +147,7 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
         ttsAnnounce = false;
         auto = { kind: 'fixed', value: [...uniqVals][0] };
       } else if (nums.length >= 5) {
-        const sorted = [...nums].sort((a, b) => a - b);
+        const sorted = [...new Set(nums)].sort((a, b) => a - b);
         const isSeq = sorted.every((n, i) => i === 0 || n === sorted[i - 1] + 1);
         if (isSeq) {
           input = 'auto';

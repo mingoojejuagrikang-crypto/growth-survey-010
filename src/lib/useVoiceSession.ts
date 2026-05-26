@@ -570,6 +570,7 @@ export function useVoiceSession() {
       if (KNOWN_NOISE.test(text.trim())) {
         logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, extra: 'known_noise' });
         recorderRef.current?.startClip();
+        useSessionStore.getState().setRecognized('');
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
