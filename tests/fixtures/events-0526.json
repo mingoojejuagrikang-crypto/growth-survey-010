@@ -1,0 +1,16 @@
+[
+  { "type": "stt", "text": "35.1", "confidence": 0.95, "alts": ["35.1"], "row": 1, "colId": "c8", "colName": "횡경" },
+  { "type": "stt", "text": "28.3", "confidence": 0.92, "alts": ["28.3"], "row": 1, "colId": "c9", "colName": "종경" },
+  { "type": "stt", "text": "42.0", "confidence": 0.94, "alts": ["42.0"], "row": 2, "colId": "c8", "colName": "횡경" },
+  { "type": "stt", "text": "31.5", "confidence": 0.90, "alts": ["31.5"], "row": 2, "colId": "c9", "colName": "종경" },
+  { "type": "stt", "text": "38.7", "confidence": 0.93, "alts": ["38.7"], "row": 3, "colId": "c8", "colName": "횡경" },
+  { "type": "stt", "text": "수정", "confidence": 0.91, "alts": ["수정"], "row": 3, "colId": "c9", "colName": "종경", "command": "modify" },
+  { "type": "stt", "text": "39.2", "confidence": 0.94, "alts": ["39.2"], "row": 3, "colId": "c8", "colName": "횡경" },
+  { "type": "stt", "text": "27.6", "confidence": 0.93, "alts": ["27.6"], "row": 3, "colId": "c9", "colName": "종경" },
+  { "type": "stt", "text": "44.1", "confidence": 0.95, "alts": ["44.1"], "row": 4, "colId": "c8", "colName": "횡경" },
+  { "type": "stt", "text": "33.8", "confidence": 0.91, "alts": ["33.8"], "row": 4, "colId": "c9", "colName": "종경" },
+  { "type": "stt", "text": "스킵", "confidence": 0.88, "alts": ["스킵"], "row": 5, "colId": "c8", "colName": "횡경", "command": "skip" },
+  { "type": "stt", "text": "41.3", "confidence": 0.94, "alts": ["41.3"], "row": 6, "colId": "c8", "colName": "횡경" },
+  { "type": "stt", "text": "변경", "confidence": 0.87, "alts": ["변경", "31.4"], "row": 6, "colId": "c9", "colName": "종경", "noise": true },
+  { "type": "stt", "text": "29.9", "confidence": 0.92, "alts": ["29.9"], "row": 6, "colId": "c9", "colName": "종경" }
+]

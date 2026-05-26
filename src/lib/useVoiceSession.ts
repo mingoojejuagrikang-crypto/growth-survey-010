@@ -566,6 +566,13 @@ export function useVoiceSession() {
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
+      const KNOWN_NOISE = /^(변경|성경|광경|구정|혜정|당장|경정)$/;
+      if (KNOWN_NOISE.test(text.trim())) {
+        logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, extra: 'known_noise' });
+        recorderRef.current?.startClip();
+        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+        return;
+      }
     }
 
     const noisyMode = useSettingsStore.getState().noisyMode;
@@ -613,6 +620,7 @@ export function useVoiceSession() {
     const sess = useSessionStore.getState();
     sess.setRowValue(awaiting.row, awaiting.colId, parsed);
     sess.setRecognized(parsed);
+    awaitingFieldRef.current = null;
 
     // Additional-2: 에코 TTS를 stopClip() 보다 먼저 발화하여 사용자 체감 지연 감소
     const echoText = awaiting.isModify

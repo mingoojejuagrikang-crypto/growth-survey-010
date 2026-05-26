@@ -21,7 +21,7 @@ export const TYPE_LABELS = {
   text: '텍스트',
   int: '정수',
   float: '실수',
-  options: '선택',
+  options: '리스트',
 } as const;
 
 export const TYPE_COLORS = {

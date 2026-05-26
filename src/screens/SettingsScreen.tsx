@@ -22,7 +22,7 @@ import {
 import { computeTotalRows, nestedAutoValue, buildCyclingValues } from '../lib/autoValue';
 import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
-import { getKoreanVoices, setPreferredVoiceName } from '../lib/speech';
+import { getKoreanVoices, setPreferredVoiceName, speak } from '../lib/speech';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
@@ -337,57 +337,67 @@ function ColumnCard({
   index,
   onChange,
   onRemove,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  isDragging,
-  isDropTarget,
+  onMoveUp,
+  onMoveDown,
+  isFirst,
+  isLast,
 }: {
   col: Column;
   index: number;
   onChange: (c: Column) => void;
   onRemove: () => void;
-  onDragStart: (idx: number) => void;
-  onDragOver: (idx: number, e: React.DragEvent) => void;
-  onDrop: (idx: number) => void;
-  isDragging: boolean;
-  isDropTarget: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  isFirst: boolean;
+  isLast: boolean;
 }) {
   const typ = TYPE_COLORS[col.type];
   return (
     <div
-      draggable
-      onDragStart={() => onDragStart(index)}
-      onDragOver={(e) => onDragOver(index, e)}
-      onDrop={() => onDrop(index)}
       style={{
         background: T.card,
         borderRadius: 14,
-        border: `1px solid ${isDropTarget ? T.blue : T.line}`,
-        boxShadow: isDropTarget ? `0 0 0 2px ${T.blueGlow}` : 'none',
+        border: `1px solid ${T.line}`,
         padding: '10px 12px 10px 4px',
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
         flexShrink: 0,
-        opacity: isDragging ? 0.4 : 1,
-        transition: 'border 150ms, box-shadow 150ms, opacity 100ms',
+        transition: 'border 150ms',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <div
           style={{
-            width: 28,
             display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            width: 28,
             alignItems: 'center',
-            justifyContent: 'center',
-            color: T.textMute,
-            cursor: 'grab',
-            touchAction: 'none',
           }}
-          title="드래그하여 순서 변경"
         >
-          {I.grip(18)}
+          <button
+            onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
+            disabled={isFirst}
+            style={{
+              border: 'none', background: 'transparent',
+              color: isFirst ? T.textMute : T.text,
+              fontSize: 14, cursor: isFirst ? 'default' : 'pointer',
+              padding: '2px 0', opacity: isFirst ? 0.3 : 1,
+              lineHeight: 1,
+            }}
+          >▲</button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
+            disabled={isLast}
+            style={{
+              border: 'none', background: 'transparent',
+              color: isLast ? T.textMute : T.text,
+              fontSize: 14, cursor: isLast ? 'default' : 'pointer',
+              padding: '2px 0', opacity: isLast ? 0.3 : 1,
+              lineHeight: 1,
+            }}
+          >▼</button>
         </div>
         <input
           value={col.name}
@@ -504,7 +514,12 @@ function TtsVoiceSelector() {
       <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>TTS 음성</div>
       <select
         value={s.preferredVoiceName}
-        onChange={(e) => s.set({ preferredVoiceName: e.target.value })}
+        onChange={(e) => {
+          const name = e.target.value;
+          s.set({ preferredVoiceName: name });
+          setPreferredVoiceName(name);
+          speak('안녕하세요, 이 음성으로 안내합니다.', { interrupt: true, rate: 1.05 });
+        }}
         style={{
           flex: 1, maxWidth: 220, height: 36, borderRadius: 8,
           background: T.inputBg, border: `1px solid ${T.line}`,
@@ -526,8 +541,6 @@ export function SettingsScreen() {
   const s = useSettingsStore();
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const [dropIdx, setDropIdx] = useState<number | null>(null);
   const [confirmedUrl, setConfirmedUrl] = useState<string>(s.sheetUrl);
   const [tablePreviewOpen, setTablePreviewOpen] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
@@ -588,7 +601,7 @@ export function SettingsScreen() {
   const loadHeaders = async (spreadsheetId: string, sheetTitle: string) => {
     try {
       setLoading('컬럼 분석 중...');
-      const { headers, sample } = await fetchHeaderAndSample(spreadsheetId, sheetTitle, 50);
+      const { headers, sample } = await fetchHeaderAndSample(spreadsheetId, sheetTitle);
       const inferred = inferColumns(headers, sample);
       // For 'options' columns, fetch a richer set of unique values
       const enriched = await Promise.all(
@@ -685,19 +698,6 @@ export function SettingsScreen() {
     const sessionAutoLabel = colVal ? `${isoDate} ${colVal}` : isoDate;
     s.set({ tableGenerated: true, totalRows: total, sessionAutoLabel });
     setTablePreviewOpen(true);
-  };
-
-  const handleDragStart = (idx: number) => setDragIdx(idx);
-  const handleDragOver = (idx: number, e: React.DragEvent) => {
-    e.preventDefault();
-    if (dragIdx !== null && dragIdx !== idx) setDropIdx(idx);
-  };
-  const handleDrop = (idx: number) => {
-    if (dragIdx !== null && dragIdx !== idx) {
-      s.reorderColumns(dragIdx, idx);
-    }
-    setDragIdx(null);
-    setDropIdx(null);
   };
 
   return (
@@ -944,7 +944,7 @@ export function SettingsScreen() {
               컬럼 · {s.columns.length}개
             </span>
             <span style={{ fontSize: 12, color: T.textMute, whiteSpace: 'nowrap' }}>
-              손잡이 끌어 순서 변경
+              화살표로 순서 변경
             </span>
           </div>
 
@@ -956,11 +956,10 @@ export function SettingsScreen() {
                 index={idx}
                 onChange={(n) => s.updateColumn(c.id, n)}
                 onRemove={() => s.removeColumn(c.id)}
-                onDragStart={handleDragStart}
-                onDragOver={handleDragOver}
-                onDrop={handleDrop}
-                isDragging={dragIdx === idx}
-                isDropTarget={dropIdx === idx && dragIdx !== idx}
+                onMoveUp={() => s.reorderColumns(idx, idx - 1)}
+                onMoveDown={() => s.reorderColumns(idx, idx + 1)}
+                isFirst={idx === 0}
+                isLast={idx === s.columns.length - 1}
               />
             ))}
 

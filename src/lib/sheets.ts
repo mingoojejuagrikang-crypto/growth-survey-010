@@ -59,7 +59,7 @@ export async function fetchSpreadsheetMeta(spreadsheetId: string): Promise<Sprea
 export async function fetchHeaderAndSample(
   spreadsheetId: string,
   sheetTitle: string,
-  sampleRows = 50,
+  sampleRows = 1000,
 ): Promise<{ headers: string[]; sample: string[][] }> {
   const range = `${encodeURIComponent(sheetTitle)}!A1:Z${sampleRows + 1}`;
   const r = await authFetch(`${API}/${spreadsheetId}/values/${range}`);
@@ -124,26 +124,55 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
       type = (Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0] as DataType) || 'text';
     }
 
-    // If text and small variety, propose options
     let auto: Column['auto'] = { kind: 'fixed', value: '' };
     let input: 'auto' | 'voice' = 'auto';
     let ttsAnnounce = false;
     let decimals: number | undefined;
 
+    const uniqVals = new Set(samples.map((v) => v.trim()).filter(Boolean));
+
     if (type === 'int' || type === 'float') {
-      input = 'voice';
-      ttsAnnounce = true;
-      auto = { kind: 'fixed', value: '' };
-      decimals = type === 'float' ? 1 : undefined;
+      const nums = samples.map(Number).filter((n) => !isNaN(n));
+
+      if (type === 'float') {
+        const maxDec = samples.reduce((max, s) => {
+          const dot = s.indexOf('.');
+          return dot >= 0 ? Math.max(max, s.length - dot - 1) : max;
+        }, 1);
+        decimals = maxDec;
+      }
+
+      if (uniqVals.size === 1) {
+        input = 'auto';
+        ttsAnnounce = false;
+        auto = { kind: 'fixed', value: [...uniqVals][0] };
+      } else if (nums.length >= 5) {
+        const sorted = [...nums].sort((a, b) => a - b);
+        const isSeq = sorted.every((n, i) => i === 0 || n === sorted[i - 1] + 1);
+        if (isSeq) {
+          input = 'auto';
+          ttsAnnounce = true;
+          auto = { kind: 'seq', from: sorted[0], to: sorted[sorted.length - 1] };
+        } else {
+          input = 'voice';
+          ttsAnnounce = true;
+          auto = { kind: 'fixed', value: '' };
+        }
+      } else {
+        input = 'voice';
+        ttsAnnounce = true;
+        auto = { kind: 'fixed', value: '' };
+      }
     } else if (type === 'date') {
       input = 'auto';
       ttsAnnounce = false;
       auto = { kind: 'fixed', value: '오늘' };
     } else if (type === 'text') {
-      const uniq = new Set(samples.map((v) => v.trim()).filter(Boolean));
-      if (uniq.size > 0 && uniq.size <= 8) {
+      if (uniqVals.size === 1) {
+        auto = { kind: 'fixed', value: [...uniqVals][0] };
+      } else if (uniqVals.size > 0 && uniqVals.size <= 20) {
         type = 'options';
-        const available = [...uniq];
+        const available = [...uniqVals];
         auto = { kind: 'options', available, selected: available.slice(0, 1) };
       } else {
         auto = { kind: 'fixed', value: '' };
