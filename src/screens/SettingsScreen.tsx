@@ -371,8 +371,8 @@ function ColumnCard({
           style={{
             display: 'flex',
             flexDirection: 'column',
-            gap: 2,
-            width: 28,
+            gap: 3,
+            width: 32,
             alignItems: 'center',
           }}
         >
@@ -380,22 +380,30 @@ function ColumnCard({
             onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
             disabled={isFirst}
             style={{
-              border: 'none', background: 'transparent',
+              width: 28, height: 24, borderRadius: 6,
+              border: `1px solid ${isFirst ? 'transparent' : T.line}`,
+              background: isFirst ? 'transparent' : 'rgba(255,255,255,0.06)',
               color: isFirst ? T.textMute : T.text,
-              fontSize: 14, cursor: isFirst ? 'default' : 'pointer',
-              padding: '2px 0', opacity: isFirst ? 0.3 : 1,
-              lineHeight: 1,
+              fontSize: 12, fontWeight: 700,
+              cursor: isFirst ? 'default' : 'pointer',
+              opacity: isFirst ? 0.25 : 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              transition: 'opacity 150ms, background 150ms',
             }}
           >▲</button>
           <button
             onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
             disabled={isLast}
             style={{
-              border: 'none', background: 'transparent',
+              width: 28, height: 24, borderRadius: 6,
+              border: `1px solid ${isLast ? 'transparent' : T.line}`,
+              background: isLast ? 'transparent' : 'rgba(255,255,255,0.06)',
               color: isLast ? T.textMute : T.text,
-              fontSize: 14, cursor: isLast ? 'default' : 'pointer',
-              padding: '2px 0', opacity: isLast ? 0.3 : 1,
-              lineHeight: 1,
+              fontSize: 12, fontWeight: 700,
+              cursor: isLast ? 'default' : 'pointer',
+              opacity: isLast ? 0.25 : 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              transition: 'opacity 150ms, background 150ms',
             }}
           >▼</button>
         </div>

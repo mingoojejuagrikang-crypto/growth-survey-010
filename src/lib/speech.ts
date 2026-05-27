@@ -236,9 +236,13 @@ export interface SpeakOptions {
 }
 
 /** Speak text. Returns a Promise that resolves when finished. */
-export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
-  if (!synth) return Promise.resolve();
-  if (opts.interrupt) synth.cancel();
+export async function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
+  if (!synth) return;
+  if (opts.interrupt) {
+    synth.cancel();
+    // iOS Safari: cancel() 직후 speak()하면 onend 미발생 버그 완화
+    await new Promise((r) => setTimeout(r, 50));
+  }
   const enqueuedAt = Date.now();
   return new Promise((resolve) => {
     const u = new SpeechSynthesisUtterance(text);
@@ -248,12 +252,25 @@ export function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
     u.rate = opts.rate ?? 1.05;
     u.pitch = opts.pitch ?? 1;
     u.volume = opts.volume ?? 1;
+
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      _activeController?.unmuteForTts();
+      resolve();
+    };
+
     u.onstart = () => {
       opts.onStart?.(Date.now() - enqueuedAt);
       _activeController?.muteForTts();
     };
-    u.onend = () => { _activeController?.unmuteForTts(); resolve(); };
-    u.onerror = () => { _activeController?.unmuteForTts(); resolve(); };
+    u.onend = done;
+    u.onerror = done;
+
+    // iOS Safari 안전장치: onend/onerror 미발생 시 10초 후 강제 resolve
+    setTimeout(done, 10_000);
+
     synth.speak(u);
   });
 }

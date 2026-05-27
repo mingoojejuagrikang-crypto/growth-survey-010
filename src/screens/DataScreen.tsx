@@ -812,6 +812,7 @@ function SessionCard({
             padding: '14px 14px',
             display: 'flex', alignItems: 'center', gap: 12,
             cursor: 'pointer', textAlign: 'left', color: 'inherit', minHeight: 56,
+            minWidth: 0, overflow: 'hidden',
           }}
         >
           <div>
@@ -873,7 +874,7 @@ function SessionCard({
             background: 'transparent', border: 'none', borderLeft: `1px solid ${T.line}`,
             color: T.textDim, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 11, fontWeight: 700,
+            fontSize: 11, fontWeight: 700, flexShrink: 0,
           }}
           title="세션 로그 다운로드"
         >
@@ -882,10 +883,11 @@ function SessionCard({
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
           style={{
-            padding: '0 12px',
+            padding: '0 14px',
             background: 'transparent', border: 'none', borderLeft: `1px solid ${T.line}`,
             color: T.red, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0, minWidth: 44,
           }}
           title="세션 삭제"
         >
