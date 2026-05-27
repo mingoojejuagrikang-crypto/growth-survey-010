@@ -254,14 +254,17 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     u.volume = opts.volume ?? 1;
 
     let settled = false;
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
     const done = () => {
       if (settled) return;
       settled = true;
+      if (watchdog) { clearTimeout(watchdog); watchdog = null; }
       _activeController?.unmuteForTts();
       resolve();
     };
 
     u.onstart = () => {
+      if (settled) return;
       opts.onStart?.(Date.now() - enqueuedAt);
       _activeController?.muteForTts();
     };
@@ -269,7 +272,7 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     u.onerror = done;
 
     // iOS Safari 안전장치: onend/onerror 미발생 시 10초 후 강제 resolve
-    setTimeout(done, 10_000);
+    watchdog = setTimeout(done, 10_000);
 
     synth.speak(u);
   });
