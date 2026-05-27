@@ -210,6 +210,7 @@ export function useVoiceSession() {
   // ── progression ────────────────────────────────────────────
   /** Move to next voice col in current row, or finalize row + jump to next target. */
   const advance = useCallback(async () => {
+    const startEpoch = epochRef.current;
     const settings = useSettingsStore.getState();
     const sess = useSessionStore.getState();
     const vc = voiceColsList();
@@ -240,8 +241,9 @@ export function useVoiceSession() {
     sess.markRowComplete(row);
     sess.setPhase('complete');
     void persistSession();
-    awaitingFieldRef.current = null; // 완료 TTS 동안 STT 입력 무시
+    awaitingFieldRef.current = null;
     await announceRowComplete(row);
+    if (epochRef.current !== startEpoch) return;
 
     // If returnRow set (came from modify/jump), go back
     const ret = sess.returnRow;
@@ -253,8 +255,9 @@ export function useVoiceSession() {
       sess.setActiveCol(targetCol);
       sess.setRecognized('');
       sess.setPhase('active');
-      awaitingFieldRef.current = null; // rowDiff TTS 동안 STT 입력 무시
+      awaitingFieldRef.current = null;
       await announceRowDiff(row, ret);
+      if (epochRef.current !== startEpoch) return;
       if (vc[targetCol]) await announceField(vc[targetCol]);
       return;
     }
@@ -273,8 +276,9 @@ export function useVoiceSession() {
     sess.setActiveCol(targetCol);
     sess.setRecognized('');
     sess.setPhase('active');
-    awaitingFieldRef.current = null; // rowDiff TTS 동안 STT 입력 무시
+    awaitingFieldRef.current = null;
     await announceRowDiff(row, next);
+    if (epochRef.current !== startEpoch) return;
     if (vc[targetCol]) await announceField(vc[targetCol]);
   }, [announceField, announceRowComplete, announceRowDiff, persistSession, say]);
 
@@ -393,20 +397,20 @@ export function useVoiceSession() {
 
   // ── skip ───────────────────────────────────────────────────
   const skipRow = useCallback(async () => {
+    const startEpoch = epochRef.current;
     const settings = useSettingsStore.getState();
     const sess = useSessionStore.getState();
     const vc = voiceColsList();
     const row = sess.activeRow;
     const total = computeTotalRows(settings.columns);
-    // Mark all voice cols in current row as empty strings to indicate skipped
     for (const c of vc) {
       sess.setRowValue(row, c.id, '');
     }
     sess.markRowComplete(row);
     void persistSession();
-    awaitingFieldRef.current = null; // 건너뜀 TTS 동안 STT 입력 무시
+    awaitingFieldRef.current = null;
     await say('건너뜁니다.');
-    // Move to next incomplete row
+    if (epochRef.current !== startEpoch) return;
     const next = findNextIncompleteRow(row + 1, total, vc);
     if (next === null) {
       sess.setPhase('done');
@@ -418,8 +422,9 @@ export function useVoiceSession() {
     const targetCol = firstIncompleteColIdx(next, vc);
     sess.setActiveCol(targetCol);
     sess.setRecognized('');
-    awaitingFieldRef.current = null; // rowDiff TTS 동안 STT 입력 무시
+    awaitingFieldRef.current = null;
     await announceRowDiff(row, next);
+    if (epochRef.current !== startEpoch) return;
     if (vc[targetCol]) await announceField(vc[targetCol]);
   }, [announceField, announceRowDiff, persistSession, say]);
 
@@ -473,20 +478,21 @@ export function useVoiceSession() {
   const handleFinal = useCallback(async (text: string, alts: string[], confidence: number) => {
     const awaiting = awaitingFieldRef.current;
     if (!awaiting) return;
-    const myEpoch = ++epochRef.current;
     const cmd = detectCommand(text);
 
     // While paused, only handle the 'resume' command; ignore everything else.
     if (useSessionStore.getState().phase === 'paused') {
       if (cmd === 'resume') {
+        epochRef.current++;
         cancelTts();
         await resumeRef.current();
       }
       return;
     }
 
-    // Commands interrupt TTS immediately
+    // Commands interrupt TTS immediately — bump epoch to invalidate in-flight advance/skip
     if (cmd) {
+      epochRef.current++;
       logger.log({
         type: 'command',
         text,
@@ -520,7 +526,6 @@ export function useVoiceSession() {
     }
     if (cmd === 'modify') {
       cancelTts();
-      // Prevent nested modify: if already in modify mode, redo current field
       if (awaiting.isModify) {
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
@@ -617,18 +622,17 @@ export function useVoiceSession() {
       return;
     }
 
-    // Fix v5.2 8-1: awaiting.row 사용 — 칩 이동/수정 흐름에서 sess.activeRow와 어긋날 수 있음
+    const myEpoch = ++epochRef.current;
     const sess = useSessionStore.getState();
     sess.setRowValue(awaiting.row, awaiting.colId, parsed);
     sess.setRecognized(parsed);
     awaitingFieldRef.current = null;
 
-    // Additional-2: 에코 TTS를 stopClip() 보다 먼저 발화하여 사용자 체감 지연 감소
     const echoText = awaiting.isModify
       ? `정정 ${awaiting.name} ${formatForTts(parsed)}`
       : formatForTts(parsed);
     const echoEnqueuedAt = Date.now();
-    speak(echoText, {
+    await speak(echoText, {
       interrupt: true,
       rate: getTtsRate(),
       onStart: (d) => {

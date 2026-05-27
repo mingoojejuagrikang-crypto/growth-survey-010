@@ -266,7 +266,6 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     u.onstart = () => {
       if (settled) return;
       opts.onStart?.(Date.now() - enqueuedAt);
-      _activeController?.muteForTts();
     };
     u.onend = done;
     u.onerror = done;
@@ -274,6 +273,9 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     // iOS Safari 안전장치: onend/onerror 미발생 시 10초 후 강제 resolve
     watchdog = setTimeout(done, 10_000);
 
+    // synth.speak → onstart 사이 50~500ms 갭 동안 STT 값이 필터링 안 되는 버그 수정:
+    // muteForTts를 onstart가 아닌 synth.speak 직전에 호출
+    _activeController?.muteForTts();
     synth.speak(u);
   });
 }
