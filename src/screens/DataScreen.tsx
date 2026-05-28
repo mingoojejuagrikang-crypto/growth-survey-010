@@ -87,14 +87,14 @@ export function DataScreen() {
       }
 
       // 2) 로그 백업: 사용자 본인 드라이브 + 관리자 폴더 양쪽 업로드 (v0.10 멀티유저).
+      // v0.10.1 Codex HIGH 수정: 관리자 폴더 설정 시 admin 업로드도 성공해야 backupOk → autoDelete 차단.
       if (report.successIds.length > 0) {
         try {
           const blob = await exportLogZip(report.successIds);
           const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
-          const userEmail = useSettingsStore.getState().userEmail;
-          const dual = await uploadLogToBothDrives(blob, filename, userEmail);
-          // 본인 드라이브 성공 시 backupOk (관리자 폴더 실패해도 데이터 보존은 OK)
-          backupOk = !!dual.userDriveId;
+          const dual = await uploadLogToBothDrives(blob, filename);
+          // backupOk: 본인 Drive 필수 + 관리자 폴더 설정 시 admin Drive도 필수
+          backupOk = !!dual.userDriveId && (!dual.adminConfigured || !!dual.adminDriveId);
           const parts: string[] = [];
           if (dual.userDriveId) parts.push('본인 Drive');
           if (dual.adminDriveId) parts.push('관리자 Drive');
@@ -102,7 +102,8 @@ export function DataScreen() {
             setMsg((m) => (m ? `${m} · 로그 ${parts.join('+')} 백업` : `✓ 로그 ${parts.join('+')} 백업`));
           }
           if (dual.errors.length > 0) {
-            setMsg((m) => `${m ?? ''} · ⚠️ 일부 백업 실패`);
+            const failedDests = dual.errors.map((e) => e.split(':')[0]).join(', ');
+            setMsg((m) => `${m ?? ''} · ⚠️ 백업 실패: ${failedDests}`);
             console.warn('Drive 로그 부분 실패', dual.errors);
           }
         } catch (err) {

@@ -1,7 +1,7 @@
 import JSZip from 'jszip';
 import { logger } from './logger';
 import { loadAudioClip, loadAllAudioClipKeys, loadLogEvents } from './db';
-import { useSettingsStore } from '../stores/settingsStore';
+import { getCurrentEmail } from './googleAuth';
 
 /** Export logs + audio clips as a ZIP.
  *  - `sessionIds` undefined → include ALL events and clips (used by manual LOG button)
@@ -9,12 +9,12 @@ import { useSettingsStore } from '../stores/settingsStore';
  *  - Empty array → still produces a device-only ZIP, no events/clips
  *
  *  v5.2 Codex 4차 MEDIUM: events는 IDB(영속)에서 우선 조회 — reload 후에도 보존됨.
- *  v0.10: device.json에 userEmail 포함 — 멀티유저 환경에서 누가 입력했는지 식별 가능.
+ *  v0.10.1: userEmail은 토큰의 검증된 값 (`getCurrentEmail`) 사용 — settingsStore stale 방지.
  */
 export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
   const zip = new JSZip();
   const deviceInfo = await logger.deviceAsync();
-  const userEmail = useSettingsStore.getState().userEmail;
+  const userEmail = getCurrentEmail();
   const deviceWithUser = { ...deviceInfo, userEmail: userEmail ?? null };
   zip.file('device.json', JSON.stringify(deviceWithUser, null, 2));
 

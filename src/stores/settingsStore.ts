@@ -23,6 +23,8 @@ interface SettingsState {
   noisyMode: boolean;
   /** Preferred Web Speech API voice name for ko-KR TTS. Empty string = auto (first available). */
   preferredVoiceName: string;
+  /** v0.10.1: 캐시된 관리자 폴더 내 본인 팀 하위 폴더 ID — race 방지용. 첫 결정 후 재사용. */
+  teamFolderId: string | null;
 
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns'>>) => void;
   updateColumn: (id: string, next: Column) => void;
@@ -87,6 +89,7 @@ export const useSettingsStore = create<SettingsState>()(
       sessionAutoLabel: null,
       noisyMode: false,
       preferredVoiceName: '',
+      teamFolderId: null,
 
       set: (partial) => set(partial),
       updateColumn: (id, next) =>
@@ -131,6 +134,7 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
         if (typeof s.noisyMode !== 'boolean') s.noisyMode = false;
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
+        if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
         return s as SettingsState;
       },
     },

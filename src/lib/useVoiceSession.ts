@@ -653,6 +653,14 @@ export function useVoiceSession() {
           if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
           return;
         }
+        // v0.10.1 Codex MEDIUM: restart/modify/jump가 epoch을 바꿨다면 stale 시도의 클립이므로 폐기.
+        // saveAudioClip은 put이므로 가드 없으면 나중 시도의 올바른 클립을 덮어쓸 수 있음.
+        if (epochRef.current !== myEpoch) {
+          logger.log({ type: 'error', extra: 'clip_stale_epoch', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+          const m = pendingClipsRef.current[clipAwaitingRow];
+          if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+          return;
+        }
         await saveAudioClip(clipKey, clipBlob);
       } catch {
         const m = pendingClipsRef.current[clipAwaitingRow];
