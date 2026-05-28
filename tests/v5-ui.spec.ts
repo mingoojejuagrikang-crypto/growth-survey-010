@@ -316,20 +316,20 @@ test('[입력] 테이블 생성 후 시작 버튼 활성화', async ({ page }) =
 });
 
 // ─── 11. 설정 탭: 버전 표시 ──────────────────────────────────────────
-test('[설정] 버전 0.9.2 표시', async ({ page }) => {
+test('[설정] 버전 0.10.0 표시', async ({ page }) => {
   await goToSettings(page);
   // 스크롤 맨 아래
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(200);
 
-  const versionText = await page.locator('text=0.9.2').first().isVisible().catch(() => false);
+  const versionText = await page.locator('text=0.10.0').first().isVisible().catch(() => false);
   if (versionText) {
-    console.log('✓ 버전 0.9.2 표시 확인');
+    console.log('✓ 버전 0.10.0 표시 확인');
   } else {
     // might be in a nested div, check with evaluate
     const bodyText = await page.evaluate(() => document.body.innerText);
-    expect(bodyText).toContain('0.9.2');
-    console.log('✓ 버전 0.9.2 페이지 내 텍스트 확인');
+    expect(bodyText).toContain('0.10.0');
+    console.log('✓ 버전 0.10.0 페이지 내 텍스트 확인');
   }
 });
 

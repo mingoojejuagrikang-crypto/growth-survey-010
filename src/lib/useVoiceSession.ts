@@ -628,6 +628,40 @@ export function useVoiceSession() {
     sess.setRecognized(parsed);
     awaitingFieldRef.current = null;
 
+    // v0.10 클립 누락 수정: stopClip을 echo TTS 이전에 시작 (병렬 실행)
+    // 이전 버그: await speak(echo) 동안 마이크 stream이 idle → 다음 startClip이 호출되면 이전 슬롯 손실
+    const clipKey = `${sessionIdRef.current}:${awaiting.row}:${awaiting.colId}`;
+    const clipAwaitingRow = awaiting.row;
+    const clipAwaitingColId = awaiting.colId;
+    pendingClipsRef.current[clipAwaitingRow] = {
+      ...pendingClipsRef.current[clipAwaitingRow],
+      [clipAwaitingColId]: clipKey,
+    };
+    const clipStopPromise = recorderRef.current?.stopClip() ?? Promise.resolve(null);
+    const savePromise = (async () => {
+      try {
+        const clipBlob = await clipStopPromise;
+        if (!clipBlob) {
+          logger.log({ type: 'error', extra: 'clip_empty', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+          const m = pendingClipsRef.current[clipAwaitingRow];
+          if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+          return;
+        }
+        if (clipBlob.size <= 200) {
+          logger.log({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+          const m = pendingClipsRef.current[clipAwaitingRow];
+          if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+          return;
+        }
+        await saveAudioClip(clipKey, clipBlob);
+      } catch {
+        const m = pendingClipsRef.current[clipAwaitingRow];
+        if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+      }
+    })();
+    pendingClipSavesRef.current.add(savePromise);
+    void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
+
     const echoText = awaiting.isModify
       ? `정정 ${awaiting.name} ${formatForTts(parsed)}`
       : formatForTts(parsed);
@@ -647,36 +681,6 @@ export function useVoiceSession() {
         });
       },
     });
-
-    // 클립 저장은 fully fire-and-forget — advance()를 블록하지 않음
-    // Codex 재검증 MEDIUM 수정:
-    //   1) clipKey를 pendingClipsRef에 사전 등록 (race 차단) — persistSession이 먼저 돌아도 키가 누락되지 않음
-    //   2) pendingClipSavesRef로 in-flight save를 추적 → stop()에서 flush 후 persistSession 재실행
-    //   3) save 실패 시 사전 등록 키를 제거 (참조 없는 키 방지)
-    const clipKey = `${sessionIdRef.current}:${awaiting.row}:${awaiting.colId}`;
-    const clipAwaitingRow = awaiting.row;
-    const clipAwaitingColId = awaiting.colId;
-    pendingClipsRef.current[clipAwaitingRow] = {
-      ...pendingClipsRef.current[clipAwaitingRow],
-      [clipAwaitingColId]: clipKey,
-    };
-    const savePromise = (async () => {
-      try {
-        const clipBlob = await recorderRef.current?.stopClip();
-        if (!clipBlob || clipBlob.size <= 200) {
-          // 너무 작거나 없으면 키 회수
-          const m = pendingClipsRef.current[clipAwaitingRow];
-          if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
-          return;
-        }
-        await saveAudioClip(clipKey, clipBlob);
-      } catch {
-        const m = pendingClipsRef.current[clipAwaitingRow];
-        if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
-      }
-    })();
-    pendingClipSavesRef.current.add(savePromise);
-    void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
 
     logger.log({
       type: 'value',
@@ -763,7 +767,8 @@ export function useVoiceSession() {
     }
     recorderRef.current?.dispose();
     recorderRef.current = null;
-    void persistSession();
+    // v0.10: await로 변경 — audioClips 키가 IDB session에 확실히 저장된 후 종료
+    await persistSession();
   }, [persistSession, say]);
 
   /** Pause STT value processing without stopping the controller.

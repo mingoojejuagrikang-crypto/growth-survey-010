@@ -11,7 +11,7 @@ import { fetchAllRows, parseSpreadsheetId } from '../lib/sheets';
 import { getAccessToken } from '../lib/googleAuth';
 import type { Column, Session, SessionRow } from '../types';
 import { exportLogZip, downloadZip } from '../lib/exportLog';
-import { uploadLogToDrive, LOG_FOLDER_ID } from '../lib/driveUpload';
+import { uploadLogToBothDrives, LOG_FOLDER_ID } from '../lib/driveUpload';
 
 export function DataScreen() {
   const sessions = useDataStore((s) => s.sessions);
@@ -86,17 +86,26 @@ export function DataScreen() {
         setMsg('추가할 새 데이터가 없습니다.');
       }
 
-      // 2) 로그 백업: 항상 시도 (autoUploadLogs 토글 제거 — 시트 추가 시 항상 백업).
-      // Codex 5차 HIGH: 부분 성공(ok>0 && failed>0) 시 successIds의 로그도 반드시 백업되어야 함.
+      // 2) 로그 백업: 사용자 본인 드라이브 + 관리자 폴더 양쪽 업로드 (v0.10 멀티유저).
       if (report.successIds.length > 0) {
         try {
           const blob = await exportLogZip(report.successIds);
           const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
-          await uploadLogToDrive(blob, filename);
-          backupOk = true;
-          setMsg((m) => (m ? `${m} · 로그 Drive 백업됨` : '✓ 로그 Drive 백업됨'));
+          const userEmail = useSettingsStore.getState().userEmail;
+          const dual = await uploadLogToBothDrives(blob, filename, userEmail);
+          // 본인 드라이브 성공 시 backupOk (관리자 폴더 실패해도 데이터 보존은 OK)
+          backupOk = !!dual.userDriveId;
+          const parts: string[] = [];
+          if (dual.userDriveId) parts.push('본인 Drive');
+          if (dual.adminDriveId) parts.push('관리자 Drive');
+          if (parts.length > 0) {
+            setMsg((m) => (m ? `${m} · 로그 ${parts.join('+')} 백업` : `✓ 로그 ${parts.join('+')} 백업`));
+          }
+          if (dual.errors.length > 0) {
+            setMsg((m) => `${m ?? ''} · ⚠️ 일부 백업 실패`);
+            console.warn('Drive 로그 부분 실패', dual.errors);
+          }
         } catch (err) {
-          // Codex 재검증 HIGH-2: 백업 실패는 명시적으로 표시 (autoDelete 차단 조건).
           setMsg((m) => (m ? `${m} · ⚠️ 로그 백업 실패` : '⚠️ 시트 추가 OK, 로그 백업 실패'));
           console.warn('Drive 로그 업로드 실패', err);
         }
