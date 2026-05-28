@@ -64,6 +64,7 @@ export function VoiceScreen() {
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}
+        onTouchCommit={(r, colId, v) => voiceSession.commitTouchValue(r, colId, v)}
         onTogglePause={() => {
           if (sess.phase === 'paused') voiceSession.resume();
           else voiceSession.pause();
@@ -191,7 +192,7 @@ function SummaryRow({ label, value, unit, accent }: { label: string; value: numb
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
   totalRows, columns, voiceCols, currentColId, completing, paused, confidence,
-  onEnd, onRestartFromCol, onJumpToRow, onTogglePause,
+  onEnd, onRestartFromCol, onJumpToRow, onTogglePause, onTouchCommit,
 }: {
   totalRows: number;
   columns: Column[];
@@ -204,6 +205,7 @@ function ActiveState({
   onRestartFromCol: (id: string) => void;
   onJumpToRow: (row: number) => void;
   onTogglePause: () => void;
+  onTouchCommit: (row: number, colId: string, value: string) => void;
 }) {
   const sess = useSessionStore();
   const row = sess.activeRow;
@@ -295,11 +297,13 @@ function ActiveState({
       >
         {columns.map((c) => {
           const isVoice = c.input === 'voice';
-          const value = isVoice
+          const isTouch = c.input === 'touch';
+          const value = isVoice || isTouch
             ? rowValues[c.id] ?? ''
             : nestedAutoValue(columns, c, row);
           const isActive = c.id === currentColId;
-          const isDone = isVoice && (rowValues[c.id] !== undefined && rowValues[c.id] !== '');
+          const hasValue = rowValues[c.id] !== undefined && rowValues[c.id] !== '';
+          const isDone = (isVoice || isTouch) && hasValue;
           const isEditingThis = editingColId === c.id;
           return (
             <ColumnChip
@@ -315,12 +319,17 @@ function ActiveState({
                   setEditingColId(null);
                   onRestartFromCol(c.id);
                 } else {
+                  // auto와 touch 모두 인라인 편집기로 진입
                   setEditingColId(c.id);
                 }
               }}
               onCommit={(newValue) => {
                 setEditingColId(null);
-                if (!isVoice && newValue !== value) {
+                if (isTouch) {
+                  // 터치 컬럼: sessionStore + dataStore + IDB에 즉시 반영 → sync/CSV 누락 방지.
+                  void onTouchCommit(row, c.id, newValue);
+                } else if (!isVoice && newValue !== value) {
+                  // auto 컬럼 변경 → 해당 값으로 행 점프
                   const targetRow = computeRowFromAutoChange(columns, c, newValue, row);
                   if (targetRow !== null) onJumpToRow(targetRow);
                 }

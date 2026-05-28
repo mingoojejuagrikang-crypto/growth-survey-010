@@ -12,8 +12,8 @@ export interface Column {
   id: string;
   name: string;
   type: DataType;
-  /** 입력 방식: 자동 채움 vs 사용자 음성 입력 */
-  input: 'auto' | 'voice';
+  /** 입력 방식: 자동 채움 vs 사용자 음성 입력 vs 사용자 터치 입력 */
+  input: 'auto' | 'voice' | 'touch';
   /** TTS로 안내할지 (auto일 땐 자동값 읽기, voice일 땐 항목명 안내) */
   ttsAnnounce: boolean;
   auto: AutoValue;

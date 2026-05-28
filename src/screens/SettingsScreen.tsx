@@ -461,22 +461,24 @@ function ColumnCard({
           options={[
             { id: 'auto', label: '자동' },
             { id: 'voice', label: '음성' },
+            { id: 'touch', label: '터치' },
           ]}
           onChange={(v) => {
             const updates: Partial<typeof col> = { input: v };
             if (v === 'voice') updates.ttsAnnounce = true;
+            if (v === 'touch') updates.ttsAnnounce = false;
             onChange({ ...col, ...updates });
           }}
         />
         <SegmentToggle
-          label="TTS"
+          label="음성확인"
           value={col.ttsAnnounce ? 'on' : 'off'}
           options={[
             { id: 'on', label: '유' },
             { id: 'off', label: '무' },
           ]}
           onChange={(v) => {
-            if (col.input === 'voice') return; // locked to 'on' for voice columns
+            if (col.input === 'voice') return;
             onChange({ ...col, ttsAnnounce: v === 'on' });
           }}
           disabled={col.input === 'voice'}
@@ -519,7 +521,7 @@ function TtsVoiceSelector() {
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>TTS 음성</div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>음성확인 음성</div>
       <select
         value={s.preferredVoiceName}
         onChange={(e) => {

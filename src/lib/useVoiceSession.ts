@@ -438,12 +438,18 @@ export function useVoiceSession() {
     // Clear this and subsequent voice values in the current row
     for (let i = idx; i < vc.length; i++) {
       sess.setRowValue(row, vc[i].id, '');
+      // v0.11.0 Codex HIGH: pendingClipsRef도 정리 — 옛 savePromise가 새 입력의 클립을 덮어쓰지 않도록
+      const pendingMap = pendingClipsRef.current[row];
+      if (pendingMap?.[vc[i].id]) {
+        const staleKey = pendingMap[vc[i].id];
+        delete pendingMap[vc[i].id];
+        void deleteAudioClip(staleKey).catch(() => {});
+      }
     }
     sess.markRowIncomplete(row);
     sess.setActiveCol(idx);
     sess.setRecognized('');
     cancelTts();
-    // v5.2: bump epoch so in-flight handleFinal's advance() guard aborts
     epochRef.current++;
     awaitingFieldRef.current = null;
     await announceField(vc[idx]);
@@ -653,12 +659,12 @@ export function useVoiceSession() {
           if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
           return;
         }
-        // v0.10.1 Codex MEDIUM: restart/modify/jump가 epoch을 바꿨다면 stale 시도의 클립이므로 폐기.
-        // saveAudioClip은 put이므로 가드 없으면 나중 시도의 올바른 클립을 덮어쓸 수 있음.
-        if (epochRef.current !== myEpoch) {
-          logger.log({ type: 'error', extra: 'clip_stale_epoch', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-          const m = pendingClipsRef.current[clipAwaitingRow];
-          if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+        // v0.11.0 Codex HIGH: pendingClipsRef로 stale save 차단.
+        // restart/modify가 pendingMap[colId]를 정리하거나 새 키로 교체하면, 옛 savePromise는
+        // m[colId] !== clipKey가 되어 폐기됨. epoch 가드보다 정밀해서 정상 클립을 차단하지 않음.
+        const guard = pendingClipsRef.current[clipAwaitingRow];
+        if (!guard || guard[clipAwaitingColId] !== clipKey) {
+          logger.log({ type: 'error', extra: 'clip_stale_pending', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
           return;
         }
         await saveAudioClip(clipKey, clipBlob);
@@ -788,7 +794,7 @@ export function useVoiceSession() {
     recorderRef.current = null;
     useSessionStore.getState().setPhase('paused');
     useSessionStore.getState().setLastTts('일시정지됨. 마이크 다시 탭하면 재개됩니다.');
-    await say('일시정지.');
+    await say('일시정지됨.');
   }, [say]);
 
   /** Resume from paused: re-announce current field. Controller is kept alive during pause. */
@@ -814,8 +820,8 @@ export function useVoiceSession() {
     }
     const vc = voiceColsList();
     const cur = vc[sess.activeColIdx];
+    await say('재시작.');
     if (cur) await announceField(cur);
-    else await say('재개합니다.');
   }, [announceField, handleFinal, say]);
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
@@ -829,7 +835,28 @@ export function useVoiceSession() {
     recorderRef.current?.dispose();
   }, []);
 
-  return { start, stop, restartFromCol, jumpToRow, pause, resume, lastConfidenceRef };
+  /** v0.11.0: touch 컬럼 값 commit 시 sessionStore + dataStore + IDB 모두에 즉시 반영.
+   *  Codex MEDIUM: setRowValue만으로는 휘발성 상태만 변경 → sync/CSV가 누락하는 위험 해결. */
+  const commitTouchValue = useCallback(async (row: number, colId: string, value: string) => {
+    const sess = useSessionStore.getState();
+    sess.setRowValue(row, colId, value);
+    // persistSession은 completedRows만 IDB에 저장. touch 값을 그 사이에 반영하려면
+    // dataStore의 기존 세션을 찾아 즉시 patch.
+    const dataStore = useDataStore.getState();
+    const existing = dataStore.sessions.find((s) => s.id === sessionIdRef.current);
+    if (existing) {
+      const updatedRows = existing.rows.map((r) =>
+        r.index === row ? { ...r, values: { ...r.values, [colId]: value } } : r,
+      );
+      const updatedSession = { ...existing, rows: updatedRows };
+      dataStore.upsertSession(updatedSession);
+      try { await saveSession(updatedSession); } catch { /* ignore */ }
+    }
+    // 행이 아직 완료된 적이 없으면(persistSession 한 번도 호출 안 됨) sessionStore만 업데이트.
+    // 다음 행 진행 시 persistSession에서 자연스럽게 반영됨.
+  }, []);
+
+  return { start, stop, restartFromCol, jumpToRow, pause, resume, commitTouchValue, lastConfidenceRef };
 }
 
 // ─── helpers ─────────────────────────────────────────────────
