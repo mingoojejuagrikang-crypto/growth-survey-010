@@ -6,7 +6,7 @@ import { appendLogEvent } from './db';
 
 export interface LogEntry {
   ts: number;
-  type: 'stt' | 'tts' | 'command' | 'session' | 'value' | 'error'
+  type: 'stt' | 'tts' | 'command' | 'session' | 'value' | 'error' | 'clip'
     | 'stt_blocked_tts_muted' | 'stt_rejected_col_name' | 'stt_alt_used' | 'stt_parse_failed';
   sessionId?: string;
   row?: number;
@@ -41,7 +41,15 @@ export interface DeviceInfo {
 
 const entries: LogEntry[] = [];
 
+/** 현재 세션 컨텍스트. sessionId를 명시하지 않은 로그(예: AudioRecorder 내부)에 자동 첨부되어
+ *  exportLogZip(sessionIds)의 세션 필터 ZIP에서 누락되지 않도록 한다. */
+let currentSessionId: string | undefined;
+
 export const logger = {
+  setSessionId(id: string | undefined): void {
+    currentSessionId = id;
+  },
+
   device(): DeviceInfo {
     const nav = navigator as Navigator & { deviceMemory?: number };
     return {
@@ -69,7 +77,8 @@ export const logger = {
   },
 
   log(entry: Omit<LogEntry, 'ts'>): void {
-    const full = { ts: Date.now(), ...entry };
+    // sessionId 미지정 시 현재 세션 컨텍스트를 자동 첨부(entry가 명시하면 그대로 우선).
+    const full = { ts: Date.now(), sessionId: currentSessionId, ...entry };
     entries.push(full);
     // Keep max 2000 entries in memory
     if (entries.length > 2000) entries.splice(0, entries.length - 2000);

@@ -74,14 +74,38 @@ export async function loadUnsyncedSessions(): Promise<Session[]> {
   return all.filter((s) => s.syncedRows < s.completedRows);
 }
 
+/** iOS Safari는 Blob을 IndexedDB에 직접 저장할 때 실패하는 이력이 있음(WebKit 버그).
+ *  ArrayBuffer + type 문자열로 분해 저장하면 모든 브라우저에서 안전하게 round-trip됨. */
+interface StoredClip {
+  buf: ArrayBuffer;
+  type: string;
+}
+
+function isStoredClip(v: unknown): v is StoredClip {
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    'buf' in v &&
+    (v as { buf: unknown }).buf instanceof ArrayBuffer
+  );
+}
+
 export async function saveAudioClip(key: string, blob: Blob): Promise<void> {
   const db = await getDb();
-  await db.put('audioClips', blob, key);
+  const buf = await blob.arrayBuffer();
+  const record: StoredClip = { buf, type: blob.type || 'audio/webm' };
+  await db.put('audioClips', record, key);
 }
 
 export async function loadAudioClip(key: string): Promise<Blob | null> {
   const db = await getDb();
-  return (await db.get('audioClips', key)) as Blob | null;
+  const v = await db.get('audioClips', key);
+  if (v == null) return null;
+  // 신형: { buf, type } 객체
+  if (isStoredClip(v)) return new Blob([v.buf], { type: v.type });
+  // 구형 하위호환: Blob을 직접 저장했던 레코드
+  if (v instanceof Blob) return v;
+  return null;
 }
 
 export async function deleteAudioClip(key: string): Promise<void> {

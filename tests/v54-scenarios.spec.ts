@@ -139,14 +139,14 @@ test('앱 로드 — 3개 탭 모두 표시', async ({ page }) => {
 // ═════════════════════════════════════════════════════════════════════════════
 // 2. 버전 확인
 // ═════════════════════════════════════════════════════════════════════════════
-test('[설정] v0.11.0 버전 표시', async ({ page }) => {
+test('[설정] v0.11.1 버전 표시', async ({ page }) => {
   await goToSettings(page);
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(200);
 
   const bodyText = await page.evaluate(() => document.body.innerText);
-  expect(bodyText).toContain('0.11.0');
-  console.log('✓ 버전 0.11.0 확인');
+  expect(bodyText).toContain('0.11.1');
+  console.log('✓ 버전 0.11.1 확인');
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

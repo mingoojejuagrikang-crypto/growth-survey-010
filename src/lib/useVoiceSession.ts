@@ -435,6 +435,7 @@ export function useVoiceSession() {
     const idx = vc.findIndex((c) => c.id === colId);
     if (idx < 0) return;
     const row = sess.activeRow;
+    logger.log({ type: 'command', parsed: 'restart', extra: 'touch', sessionId: sessionIdRef.current, row, colId });
     // Clear this and subsequent voice values in the current row
     for (let i = idx; i < vc.length; i++) {
       sess.setRowValue(row, vc[i].id, '');
@@ -465,6 +466,7 @@ export function useVoiceSession() {
       if (targetRow < 1 || targetRow > total) return;
       const cur = sess.activeRow;
       if (targetRow === cur) return;
+      logger.log({ type: 'command', parsed: 'jump', extra: `touch:${cur}->${targetRow}`, sessionId: sessionIdRef.current, row: targetRow });
       if (options?.setReturn ?? true) sess.setReturn(cur, sess.activeColIdx);
       sess.setActiveRow(targetRow);
       const targetCol = firstIncompleteColIdx(targetRow, vc);
@@ -646,7 +648,9 @@ export function useVoiceSession() {
     const clipStopPromise = recorderRef.current?.stopClip() ?? Promise.resolve(null);
     const savePromise = (async () => {
       try {
+        logger.log({ type: 'clip', extra: 'clip_stop_await', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
         const clipBlob = await clipStopPromise;
+        logger.log({ type: 'clip', extra: `clip_stop_resolved:${clipBlob ? clipBlob.size : 'null'}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
         if (!clipBlob) {
           logger.log({ type: 'error', extra: 'clip_empty', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
           const m = pendingClipsRef.current[clipAwaitingRow];
@@ -668,7 +672,9 @@ export function useVoiceSession() {
           return;
         }
         await saveAudioClip(clipKey, clipBlob);
-      } catch {
+        logger.log({ type: 'clip', extra: `clip_saved:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+      } catch (e) {
+        logger.log({ type: 'error', extra: `clip_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
         const m = pendingClipsRef.current[clipAwaitingRow];
         if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
       }
@@ -739,6 +745,7 @@ export function useVoiceSession() {
     epochRef.current = 0;
     pendingClipsRef.current = {};
     correctionBackupRef.current = null;
+    logger.setSessionId(sessionIdRef.current);
     logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'start' });
 
     // Init audio recorder fire-and-forget — mic permission is independent of STT startup.
@@ -783,13 +790,23 @@ export function useVoiceSession() {
     recorderRef.current = null;
     // v0.10: await로 변경 — audioClips 키가 IDB session에 확실히 저장된 후 종료
     await persistSession();
+    logger.setSessionId(undefined);
   }, [persistSession, say]);
 
   /** Pause STT value processing without stopping the controller.
    *  The controller stays active so the user can say '재시작' to resume.
    *  Recorder is disposed to prevent clip accumulation while paused. */
   const pause = useCallback(async () => {
+    logger.log({ type: 'command', parsed: 'pause', extra: 'phase', sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow });
     cancelTts();
+    // dispose가 in-flight stopClip을 null로 해소해 정상 클립이 clip_empty로 떨어지는 것을 방지:
+    // stop()과 동일하게 pending save를 먼저 flush.
+    if (pendingClipSavesRef.current.size > 0) {
+      await Promise.race([
+        Promise.allSettled(Array.from(pendingClipSavesRef.current)),
+        new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+      ]);
+    }
     recorderRef.current?.dispose();
     recorderRef.current = null;
     useSessionStore.getState().setPhase('paused');
@@ -801,6 +818,7 @@ export function useVoiceSession() {
   const resume = useCallback(async () => {
     const sess = useSessionStore.getState();
     if (sess.phase !== 'paused') return;
+    logger.log({ type: 'command', parsed: 'resume', extra: 'phase', sessionId: sessionIdRef.current, row: sess.activeRow });
     sess.setPhase('active');
     epochRef.current = 0;
     // Controller stays alive during pause (pause() no longer stops it).
@@ -839,6 +857,7 @@ export function useVoiceSession() {
    *  Codex MEDIUM: setRowValue만으로는 휘발성 상태만 변경 → sync/CSV가 누락하는 위험 해결. */
   const commitTouchValue = useCallback(async (row: number, colId: string, value: string) => {
     const sess = useSessionStore.getState();
+    logger.log({ type: 'command', parsed: 'touch_commit', extra: 'touch', text: value, sessionId: sessionIdRef.current, row, colId });
     sess.setRowValue(row, colId, value);
     // persistSession은 completedRows만 IDB에 저장. touch 값을 그 사이에 반영하려면
     // dataStore의 기존 세션을 찾아 즉시 patch.
