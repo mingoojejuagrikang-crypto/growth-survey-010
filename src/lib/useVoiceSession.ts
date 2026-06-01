@@ -318,6 +318,7 @@ export function useVoiceSession() {
           const stalePendingKey = pendingMap[target.id];
           delete pendingMap[target.id];
           void deleteAudioClip(stalePendingKey).catch(() => {});
+          logger.log({ type: 'clip', extra: 'clip_delete_req:modify_pending', sessionId: sessionIdRef.current, row: targetRow, colId: target.id });
         }
         // (2) 이미 persistSession으로 dataStore에 들어간 경우 — 해당 row의 audioClips 정리
         const existing = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
@@ -325,6 +326,7 @@ export function useVoiceSession() {
         if (existing && existingRow?.audioClips?.[target.id]) {
           const staleExistingKey = existingRow.audioClips[target.id];
           void deleteAudioClip(staleExistingKey).catch(() => {});
+          logger.log({ type: 'clip', extra: 'clip_delete_req:modify_persisted', sessionId: sessionIdRef.current, row: targetRow, colId: target.id });
           const { [target.id]: _removed, ...restClips } = existingRow.audioClips;
           const updatedRow = {
             ...existingRow,
@@ -385,6 +387,7 @@ export function useVoiceSession() {
         const staleKey = pendingMap[vc[i].id];
         delete pendingMap[vc[i].id];
         void deleteAudioClip(staleKey).catch(() => {});
+        logger.log({ type: 'clip', extra: 'clip_delete_req:modify_cascade', sessionId: sessionIdRef.current, row: targetRow, colId: vc[i].id });
       }
     }
     sess.markRowIncomplete(targetRow);
@@ -445,6 +448,7 @@ export function useVoiceSession() {
         const staleKey = pendingMap[vc[i].id];
         delete pendingMap[vc[i].id];
         void deleteAudioClip(staleKey).catch(() => {});
+        logger.log({ type: 'clip', extra: 'clip_delete_req:restart', sessionId: sessionIdRef.current, row, colId: vc[i].id });
       }
     }
     sess.markRowIncomplete(row);

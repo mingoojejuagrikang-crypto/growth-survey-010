@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { T } from '../tokens';
 import { I } from '../components/icons';
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -32,6 +32,9 @@ export function DataScreen() {
   const importDataRef = useRef<{ headers: string[]; rows: string[][] } | null>(null);
 
   const lastSelectedIdsRef = useRef<string[]>([]);
+
+  // 데이터탭을 떠나면(언마운트) 재생 중인 음성 클립 정지 — 전역 싱글톤이라 화면 밖에서 계속 재생되지 않도록 (Codex HIGH)
+  useEffect(() => () => { clipPlayer.stop(); }, []);
 
   const doSessionLogDownload = useCallback(async (sessionId: string, sessionDate: string) => {
     setBusy('로그 압축 중...');
@@ -137,6 +140,7 @@ export function DataScreen() {
         return;
       }
       const successIds = report.successIds;
+      clipPlayer.stop(); // 클립 IDB 삭제 전 재생 정지 — 삭제된 세션 클립이 계속 재생되지 않도록 (Codex HIGH)
       for (const id of successIds) {
         try { await dbDeleteSession(id); } catch { /* ignore */ }
         removeSession(id);
@@ -155,6 +159,7 @@ export function DataScreen() {
     if (!deleteTarget) return;
     const id = deleteTarget.id;
     setDeleteTarget(null);
+    clipPlayer.stop(); // 클립 IDB 삭제 전 재생 정지 (Codex HIGH)
     try { await dbDeleteSession(id); } catch { /* ignore */ }
     removeSession(id);
     setMsg('세션 삭제됨');
@@ -919,7 +924,7 @@ function FullRowTable({
   const cols = session.columns;
   const rows = session.rows;
   const colWidthFor = (c: Column) =>
-    c.type === 'date' ? 110 : c.type === 'text' || c.type === 'options' ? 100 : 80;
+    c.type === 'date' ? 110 : c.type === 'text' ? 140 : c.type === 'options' ? 100 : 80;
 
   return (
     <div
@@ -963,7 +968,7 @@ function FullRowTable({
                   width: colWidthFor(c), padding: '8px 8px',
                   fontSize: 12, fontWeight: 700, color: T.textDim,
                   borderRight: `1px solid ${T.line}`,
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere',
                 }}
               >
                 {c.name}
@@ -1018,6 +1023,90 @@ function FullRowTable({
   );
 }
 
+/**
+ * 모듈 레벨 단일 오디오 재생 매니저 (v0.11.2).
+ * 데이터탭의 여러 음성 클립을 동시에 누르면 동시 재생되던 문제를 해결 —
+ * 한 번에 하나만 재생하고 나머지는 큐에 대기, 끝나면 순서대로 재생한다.
+ * - 재생 중인 클립을 다시 탭 → 정지 + 대기 큐 전체 취소 (사용자 "그만" 의도)
+ * - 대기 중인 클립을 탭 → 해당 클립만 큐에서 취소
+ */
+type ClipPlayState = 'idle' | 'playing' | 'queued';
+const clipPlayer = (() => {
+  let current: string | null = null;
+  let queue: string[] = [];
+  let audio: HTMLAudioElement | null = null;
+  let objectUrl: string | null = null;
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((l) => l());
+
+  const cleanup = () => {
+    if (audio) { audio.onended = null; audio.onerror = null; audio.pause(); audio = null; }
+    if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+  };
+
+  const stop = () => {
+    cleanup();
+    current = null;
+    queue = [];
+    notify();
+  };
+
+  const playNext = async () => {
+    if (current) return; // 이미 재생 중
+    const key = queue.shift();
+    if (!key) { notify(); return; }
+    current = key;
+    notify();
+    let blob: Blob | null = null;
+    try { blob = await loadAudioClip(key); } catch { blob = null; }
+    // await 사이에 정지(stop/toggle)되었으면 이 continuation은 폐기 — stale 재생 방지 (Codex HIGH)
+    if (current !== key) return;
+    if (!blob) { current = null; notify(); void playNext(); return; }
+    cleanup();
+    objectUrl = URL.createObjectURL(blob);
+    const a = new Audio(objectUrl);
+    audio = a;
+    const advance = () => {
+      if (audio !== a) return; // stale audio의 이벤트는 무시
+      cleanup(); current = null; notify(); void playNext();
+    };
+    a.onended = advance;
+    a.onerror = advance;
+    try {
+      await a.play();
+    } catch {
+      if (audio === a) { cleanup(); current = null; notify(); void playNext(); }
+      return;
+    }
+    if (audio === a) notify();
+  };
+
+  return {
+    subscribe(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn); }; },
+    stateOf(key: string): ClipPlayState {
+      if (current === key) return 'playing';
+      if (queue.includes(key)) return 'queued';
+      return 'idle';
+    },
+    toggle(key: string) {
+      if (current === key) {
+        // 재생 중인 클립 탭 → 정지 + 큐 전체 취소
+        stop();
+        return;
+      }
+      if (queue.includes(key)) {
+        // 대기 중인 클립 탭 → 취소
+        queue = queue.filter((k) => k !== key); notify();
+        return;
+      }
+      queue.push(key); notify();
+      void playNext();
+    },
+    // 데이터탭 언마운트·세션 삭제 시 호출 — 전역 재생이 화면 밖에서 지속되지 않도록 (Codex HIGH)
+    stop,
+  };
+})();
+
 function EditableCell({
   col, value, width, audioClipKey, onSave,
 }: {
@@ -1029,18 +1118,23 @@ function EditableCell({
 }) {
   const [editing, setEditing] = useState(false);
   const [local, setLocal] = useState(value);
-  const [playing, setPlaying] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const objectUrlRef = useRef<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const skipBlurRef = useRef(false);
+  const clipState = useSyncExternalStore(
+    clipPlayer.subscribe,
+    () => (audioClipKey ? clipPlayer.stateOf(audioClipKey) : 'idle'),
+  );
 
   useEffect(() => { if (!editing) setLocal(value); }, [value, editing]);
-  useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
-
-  useEffect(() => () => {
-    audioRef.current?.pause();
-    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-  }, []);
+  useEffect(() => {
+    if (!editing) return;
+    const el = inputRef.current;
+    el?.focus();
+    if (el instanceof HTMLTextAreaElement) {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    }
+  }, [editing]);
 
   const commit = () => {
     if (local !== value) onSave(local);
@@ -1050,35 +1144,18 @@ function EditableCell({
     setLocal(value);
     setEditing(false);
   };
-
-  const handlePlay = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (playing) {
-      audioRef.current?.pause();
-      setPlaying(false);
-      return;
-    }
-    if (!audioClipKey) return;
-    try {
-      const blob = await loadAudioClip(audioClipKey);
-      if (!blob) return;
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-      const url = URL.createObjectURL(blob);
-      objectUrlRef.current = url;
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => setPlaying(false);
-      audio.onerror = () => setPlaying(false);
-      await audio.play();
-      setPlaying(true);
-    } catch {
-      setPlaying(false);
-    }
+  // 키보드 commit/cancel 시 직후 발생하는 blur가 한 번 더 commit하지 않도록 가드 (Codex MEDIUM)
+  const handleBlur = () => {
+    if (skipBlurRef.current) { skipBlurRef.current = false; return; }
+    commit();
   };
+  const keyCommit = () => { skipBlurRef.current = true; commit(); };
+  const keyCancel = () => { skipBlurRef.current = true; cancel(); };
 
   const isVoice = col.input === 'voice';
   const hasClip = isVoice && !!audioClipKey;
   const isDate = col.type === 'date';
+  const isText = col.type === 'text';
   const inputType = isDate ? 'date' : 'text';
   const inputMode = col.type === 'int' ? 'numeric' : col.type === 'float' ? 'decimal' : 'text';
 
@@ -1092,27 +1169,55 @@ function EditableCell({
       }}
     >
       {editing ? (
-        <input
-          ref={inputRef}
-          type={inputType}
-          value={local}
-          inputMode={isDate ? undefined : (inputMode as 'numeric' | 'decimal' | 'text')}
-          onChange={(e) => setLocal(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commit();
-            else if (e.key === 'Escape') cancel();
-          }}
-          style={{
-            flex: 1, height: '100%',
-            padding: '8px 8px',
-            background: 'transparent', border: 'none', outline: 'none',
-            color: T.text,
-            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            fontSize: 14, fontWeight: 700,
-            minHeight: 36,
-          }}
-        />
+        isText ? (
+          <textarea
+            ref={(el) => { inputRef.current = el; }}
+            value={local}
+            onChange={(e) => {
+              setLocal(e.target.value);
+              e.target.style.height = 'auto';
+              e.target.style.height = `${e.target.scrollHeight}px`;
+            }}
+            onBlur={handleBlur}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); keyCommit(); }
+              else if (e.key === 'Escape') keyCancel();
+            }}
+            rows={1}
+            style={{
+              flex: 1,
+              padding: '8px 8px',
+              background: 'transparent', border: 'none', outline: 'none',
+              color: T.text,
+              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+              fontSize: 14, fontWeight: 700,
+              minHeight: 36, resize: 'none', overflow: 'hidden',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.4,
+            }}
+          />
+        ) : (
+          <input
+            ref={(el) => { inputRef.current = el; }}
+            type={inputType}
+            value={local}
+            inputMode={isDate ? undefined : (inputMode as 'numeric' | 'decimal' | 'text')}
+            onChange={(e) => setLocal(e.target.value)}
+            onBlur={handleBlur}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') keyCommit();
+              else if (e.key === 'Escape') keyCancel();
+            }}
+            style={{
+              flex: 1, height: '100%',
+              padding: '8px 8px',
+              background: 'transparent', border: 'none', outline: 'none',
+              color: T.text,
+              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+              fontSize: 14, fontWeight: 700,
+              minHeight: 36,
+            }}
+          />
+        )
       ) : (
         <>
           <button
@@ -1125,25 +1230,25 @@ function EditableCell({
               fontSize: 14, fontWeight: 700,
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
               textAlign: 'left', cursor: 'pointer',
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere',
             }}
           >
             {value || <span style={{ color: T.textMute, opacity: 0.5 }}>—</span>}
           </button>
           {hasClip && (
             <button
-              onClick={handlePlay}
-              title={playing ? '정지' : '음성 재생'}
+              onClick={(e) => { e.stopPropagation(); if (audioClipKey) clipPlayer.toggle(audioClipKey); }}
+              title={clipState === 'playing' ? '정지' : clipState === 'queued' ? '대기 중 (탭하면 취소)' : '음성 재생'}
               style={{
                 flexShrink: 0,
                 width: 28, padding: '0 4px',
                 background: 'transparent', border: 'none',
-                color: playing ? T.amber : T.blue,
+                color: clipState === 'playing' ? T.amber : clipState === 'queued' ? T.textMute : T.blue,
                 cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
             >
-              {playing ? I.stop(12, T.amber) : I.play(12, T.blue)}
+              {clipState === 'playing' ? I.stop(12, T.amber) : I.play(12, clipState === 'queued' ? T.textMute : T.blue)}
             </button>
           )}
         </>
